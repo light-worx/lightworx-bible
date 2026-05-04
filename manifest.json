@@ -1,0 +1,10 @@
+{
+  "id": "lightworx-bible",
+  "name": "Bible",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Look up and insert Bible passages from your local SQLite database while writing sermons.",
+  "author": "Michael Bishop",
+  "authorUrl": "https://lightworx.co.za",
+  "isDesktopOnly": false
+}

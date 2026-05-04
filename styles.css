@@ -1,0 +1,326 @@
+/* ── Bible Plugin Styles ─────────────────────────────── */
+
+.bible-plugin-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-family: var(--font-interface);
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+/* Header */
+.bible-header {
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.bible-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Tabs */
+.bible-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 10px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.bible-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.bible-tab:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.bible-tab.active {
+  color: var(--text-accent);
+  border-bottom-color: var(--text-accent);
+}
+
+/* Body */
+.bible-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Rows */
+.bible-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bible-row-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.bible-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.bible-dash {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* Selects */
+.bible-select {
+  width: 100%;
+  background: var(--background-modifier-form-field);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  color: var(--text-normal);
+  padding: 5px 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.bible-select-sm {
+  background: var(--background-modifier-form-field);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  color: var(--text-normal);
+  padding: 4px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 52px;
+}
+
+.bible-select:focus,
+.bible-select-sm:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb), 0.2);
+}
+
+/* Search input */
+.bible-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--background-modifier-form-field);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+  color: var(--text-normal);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.bible-search-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb), 0.2);
+}
+
+/* Buttons */
+.bible-btn {
+  width: 100%;
+  padding: 7px 12px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+  margin-top: 4px;
+}
+
+.bible-btn:hover {
+  opacity: 0.88;
+}
+
+.bible-btn:active {
+  transform: scale(0.98);
+}
+
+.bible-insert-btn {
+  background: var(--color-green);
+  margin-top: 10px;
+}
+
+.bible-btn-sm {
+  padding: 3px 9px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+.bible-btn-sm:hover { opacity: 0.85; }
+
+/* Results area */
+.bible-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.bible-ref {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.bible-verse-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.bible-verse {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--text-normal);
+}
+
+.bible-verse-num {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-accent);
+  vertical-align: super;
+  margin-right: 1px;
+}
+
+/* Search results */
+.bible-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+  border-left: 3px solid var(--interactive-accent);
+}
+
+.bible-search-ref {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.bible-search-text {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-normal);
+}
+
+/* Notices */
+.bible-notice {
+  font-size: 13px;
+  color: var(--text-warning);
+  background: var(--background-modifier-warning);
+  padding: 10px 12px;
+  border-radius: 6px;
+  line-height: 1.5;
+}
+
+.bible-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+  padding: 16px 0;
+}
+
+/* ── Quick Insert Modal ────────────────────────────────────── */
+
+.bible-modal-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.bible-modal-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+
+.bible-modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 15px;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-modifier-form-field);
+  color: var(--text-normal);
+  margin-bottom: 10px;
+}
+
+.bible-modal-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb), 0.2);
+}
+
+.bible-modal-feedback {
+  font-size: 12px;
+  color: var(--text-warning);
+  min-height: 18px;
+  margin: 0 0 8px;
+}
+
+.bible-modal-preview {
+  margin-bottom: 12px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+  border-left: 3px solid var(--interactive-accent);
+}
+
+.bible-modal-preview:empty {
+  display: none;
+}
+
+.bible-modal-btn {
+  width: 100%;
+  margin-top: 0;
+}
