@@ -37,7 +37,7 @@ const DEFAULT_SETTINGS: BiblePluginSettings = {
   defaultTranslation: "niv",
 };
 
-const TRANSLATIONS = ["gnt", "niv"];
+const TRANSLATIONS = ["gnt", "niv", "ceb", "msg", "nrsv"];
 const VIEW_TYPE = "bible-study-view";
 
 class BibleDatabase {
@@ -129,7 +129,7 @@ function parseReference(raw: string, books: Book[], defaultTranslation: string):
   const s = raw.replace(/^\{\{|\}\}$/g, "").trim();
 
   // Optional translation suffix, e.g. "NIV" or "GNT"
-  const transMatch = s.match(/\s+(GNT|NIV|CEB|MSG)$/i);
+  const transMatch = s.match(/\s+(GNT|NIV|CEB|MSG|NRSV)$/i);
   const translation = transMatch ? transMatch[1].toLowerCase() : defaultTranslation;
   const refStr = transMatch ? s.slice(0, -transMatch[0].length).trim() : s;
 
