@@ -7,11 +7,12 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
-  SuggestModal,
   WorkspaceLeaf,
   ItemView,
 } from "obsidian";
 import * as path from "path";
+
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
 interface BibleVerse {
   book_id: number;
@@ -27,6 +28,18 @@ interface Book {
   chapters: number;
 }
 
+interface BibleNote {
+  id: number;
+  body: string;
+  book_id: number | null;
+  chapter: number | null;
+  verse_start: number | null;
+  verse_end: number | null;
+  tags: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface BiblePluginSettings {
   dbPath: string;
   defaultTranslation: string;
@@ -37,26 +50,63 @@ const DEFAULT_SETTINGS: BiblePluginSettings = {
   defaultTranslation: "niv",
 };
 
-const TRANSLATIONS = ["gnt", "niv", "ceb", "msg", "nrsv"];
+const TRANSLATIONS = ["gnt", "niv"];
 const VIEW_TYPE = "bible-study-view";
+
+// ─── Database ─────────────────────────────────────────────────────────────────
 
 class BibleDatabase {
   private db: any = null;
   private books: Book[] = [];
+  private dbPath: string = "";
 
-  // The WASM binary is bundled inline — no external files needed
   async load(pluginDir: string, dbPath: string): Promise<void> {
     const fs = require("fs");
     const initSqlJs = require("sql.js/dist/sql-wasm.js");
-    // wasmBinary is injected at build time via esbuild binary loader
     const wasmBinary: Uint8Array = require("./sql-wasm.wasm");
     const SQL = await initSqlJs({ wasmBinary });
     const fileBuffer = fs.readFileSync(dbPath);
     this.db = new SQL.Database(fileBuffer);
+    this.dbPath = dbPath;
+    this.ensureNotesSchema();
     this.books = this.fetchBooks();
   }
 
   isLoaded(): boolean { return this.db !== null; }
+
+  // ── Schema ──────────────────────────────────────────────────────────────────
+
+  private ensureNotesSchema(): void {
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS notes (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        body        TEXT    NOT NULL DEFAULT '',
+        book_id     INTEGER,
+        chapter     INTEGER,
+        verse_start INTEGER,
+        verse_end   INTEGER,
+        tags        TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    this.saveToDisk();
+  }
+
+  // ── Persistence ─────────────────────────────────────────────────────────────
+
+  saveToDisk(): void {
+    if (!this.db || !this.dbPath) return;
+    const fs = require("fs");
+    try {
+      const data: Uint8Array = this.db.export();
+      fs.writeFileSync(this.dbPath, data);
+    } catch (e: any) {
+      console.error("Bible plugin: failed to save DB", e);
+    }
+  }
+
+  // ── Books ────────────────────────────────────────────────────────────────────
 
   private fetchBooks(): Book[] {
     if (!this.db) return [];
@@ -71,6 +121,8 @@ class BibleDatabase {
     const book = this.books.find((b) => b.id === bookId);
     return book ? book.chapters : 0;
   }
+
+  // ── Verses ───────────────────────────────────────────────────────────────────
 
   getVerseCount(translation: string, bookId: number, chapter: number): number {
     if (!this.db) return 0;
@@ -107,14 +159,134 @@ class BibleDatabase {
     }));
   }
 
+  // ── Notes CRUD ───────────────────────────────────────────────────────────────
+
+  createNote(note: Omit<BibleNote, "id" | "created_at" | "updated_at">): number {
+    if (!this.db) return -1;
+    const { body, book_id, chapter, verse_start, verse_end, tags } = note;
+    const safe = (s: string | null) => s === null ? "NULL" : `'${s.replace(/'/g, "''")}'`;
+    const num = (n: number | null) => n === null ? "NULL" : String(n);
+    this.db.run(
+      `INSERT INTO notes (body, book_id, chapter, verse_start, verse_end, tags)
+       VALUES (${safe(body)}, ${num(book_id)}, ${num(chapter)}, ${num(verse_start)}, ${num(verse_end)}, ${safe(tags)})`
+    );
+    const res = this.db.exec("SELECT last_insert_rowid()");
+    const id = res[0].values[0][0] as number;
+    this.saveToDisk();
+    return id;
+  }
+
+  updateNote(id: number, body: string, tags: string | null): void {
+    if (!this.db) return;
+    const safeBody = body.replace(/'/g, "''");
+    const safeTags = tags === null ? "NULL" : `'${tags.replace(/'/g, "''")}'`;
+    this.db.run(
+      `UPDATE notes SET body = '${safeBody}', tags = ${safeTags}, updated_at = datetime('now') WHERE id = ${id}`
+    );
+    this.saveToDisk();
+  }
+
+  deleteNote(id: number): void {
+    if (!this.db) return;
+    this.db.run(`DELETE FROM notes WHERE id = ${id}`);
+    this.saveToDisk();
+  }
+
+  getNoteById(id: number): BibleNote | null {
+    if (!this.db) return null;
+    const res = this.db.exec(
+      `SELECT id, body, book_id, chapter, verse_start, verse_end, tags, created_at, updated_at FROM notes WHERE id = ${id}`
+    );
+    if (!res.length || !res[0].values.length) return null;
+    return this.rowToNote(res[0].values[0]);
+  }
+
+  // Returns notes whose scope covers the given verse.
+  // A note scoped to a chapter covers all its verses; a book note covers all chapters, etc.
+  getNotesForVerse(bookId: number, chapter: number, verse: number): BibleNote[] {
+    if (!this.db) return [];
+    const res = this.db.exec(`
+      SELECT id, body, book_id, chapter, verse_start, verse_end, tags, created_at, updated_at
+      FROM notes
+      WHERE
+        (book_id IS NULL) OR
+        (book_id = ${bookId} AND chapter IS NULL) OR
+        (book_id = ${bookId} AND chapter = ${chapter} AND verse_start IS NULL) OR
+        (book_id = ${bookId} AND chapter = ${chapter}
+          AND verse_start <= ${verse}
+          AND (verse_end IS NULL OR verse_end >= ${verse}))
+      ORDER BY updated_at DESC
+    `);
+    if (!res.length) return [];
+    return res[0].values.map(this.rowToNote);
+  }
+
+  getNotesForPassage(bookId: number, chapter: number, startVerse: number, endVerse: number): BibleNote[] {
+    if (!this.db) return [];
+    const res = this.db.exec(`
+      SELECT id, body, book_id, chapter, verse_start, verse_end, tags, created_at, updated_at
+      FROM notes
+      WHERE
+        (book_id IS NULL) OR
+        (book_id = ${bookId} AND chapter IS NULL) OR
+        (book_id = ${bookId} AND chapter = ${chapter} AND verse_start IS NULL) OR
+        (book_id = ${bookId} AND chapter = ${chapter}
+          AND verse_start <= ${endVerse}
+          AND (verse_end IS NULL OR verse_end >= ${startVerse}))
+      ORDER BY updated_at DESC
+    `);
+    if (!res.length) return [];
+    return res[0].values.map(this.rowToNote);
+  }
+
+  getNotesForBook(bookId: number): BibleNote[] {
+    if (!this.db) return [];
+    const res = this.db.exec(`
+      SELECT id, body, book_id, chapter, verse_start, verse_end, tags, created_at, updated_at
+      FROM notes WHERE book_id = ${bookId}
+      ORDER BY chapter ASC, verse_start ASC, updated_at DESC
+    `);
+    if (!res.length) return [];
+    return res[0].values.map(this.rowToNote);
+  }
+
+  getAllNotes(): BibleNote[] {
+    if (!this.db) return [];
+    const res = this.db.exec(
+      `SELECT id, body, book_id, chapter, verse_start, verse_end, tags, created_at, updated_at
+       FROM notes ORDER BY updated_at DESC`
+    );
+    if (!res.length) return [];
+    return res[0].values.map(this.rowToNote);
+  }
+
+  searchNotes(query: string): BibleNote[] {
+    if (!this.db || !query.trim()) return [];
+    const safe = query.replace(/'/g, "''");
+    const res = this.db.exec(`
+      SELECT id, body, book_id, chapter, verse_start, verse_end, tags, created_at, updated_at
+      FROM notes
+      WHERE body LIKE '%${safe}%' OR tags LIKE '%${safe}%'
+      ORDER BY updated_at DESC
+    `);
+    if (!res.length) return [];
+    return res[0].values.map(this.rowToNote);
+  }
+
+  private rowToNote(r: any[]): BibleNote {
+    return {
+      id: r[0], body: r[1], book_id: r[2], chapter: r[3],
+      verse_start: r[4], verse_end: r[5], tags: r[6],
+      created_at: r[7], updated_at: r[8],
+    };
+  }
+
   close(): void {
     if (this.db) { this.db.close(); this.db = null; }
   }
 }
 
-// ─── Reference Parser ────────────────────────────────────────────────────────
-// Parses strings like "John 3:16", "Romans 8:1-4", "Romans 8:1-4 NIV"
-// Returns null if the reference can't be resolved.
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 interface ParsedRef {
   book: Book;
@@ -125,32 +297,265 @@ interface ParsedRef {
 }
 
 function parseReference(raw: string, books: Book[], defaultTranslation: string): ParsedRef | null {
-  // Strip outer {{ }} if present
   const s = raw.replace(/^\{\{|\}\}$/g, "").trim();
-
-  // Optional translation suffix, e.g. "NIV" or "GNT"
-  const transMatch = s.match(/\s+(GNT|NIV|CEB|MSG|NRSV)$/i);
+  const transMatch = s.match(/\s+(GNT|NIV|CEB|MSG)$/i);
   const translation = transMatch ? transMatch[1].toLowerCase() : defaultTranslation;
   const refStr = transMatch ? s.slice(0, -transMatch[0].length).trim() : s;
-
-  // Match "Book Chapter:Verse" or "Book Chapter:Verse-EndVerse"
   const m = refStr.match(/^(.+?)\s+(\d+):(\d+)(?:-(\d+))?$/);
   if (!m) return null;
-
   const [, bookRaw, chapterStr, startStr, endStr] = m;
   const chapter = parseInt(chapterStr);
   const startVerse = parseInt(startStr);
   const endVerse = endStr ? parseInt(endStr) : startVerse;
-
-  // Match book name — try exact first, then case-insensitive prefix
   const bookQuery = bookRaw.trim().toLowerCase();
   const book =
     books.find((b) => b.book.toLowerCase() === bookQuery) ??
     books.find((b) => b.abbreviation.toLowerCase() === bookQuery) ??
     books.find((b) => b.book.toLowerCase().startsWith(bookQuery));
-
   if (!book) return null;
   return { book, chapter, startVerse, endVerse, translation };
+}
+
+/** Human-readable scope label for a note, e.g. "John 3:16–18" or "Romans (whole book)" */
+function noteRefLabel(note: BibleNote, books: Book[]): string {
+  if (note.book_id === null) return "Whole Bible";
+  const book = books.find((b) => b.id === note.book_id);
+  const bookName = book?.book ?? `Book ${note.book_id}`;
+  if (note.chapter === null) return `${bookName} (whole book)`;
+  if (note.verse_start === null) return `${bookName} ${note.chapter} (whole chapter)`;
+  const end = note.verse_end !== null && note.verse_end !== note.verse_start
+    ? `–${note.verse_end}` : "";
+  return `${bookName} ${note.chapter}:${note.verse_start}${end}`;
+}
+
+/** Format a date string as a short relative label */
+function shortDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  } catch { return iso; }
+}
+
+// ─── Note Modal ───────────────────────────────────────────────────────────────
+
+interface NoteModalPrefill {
+  book_id: number | null;
+  bookName: string;
+  chapter: number | null;
+  verse_start: number | null;
+  verse_end: number | null;
+}
+
+class BibleNoteModal extends Modal {
+  private plugin: BibleStudyPlugin;
+  private existingNote: BibleNote | null;
+  private prefill: NoteModalPrefill | null;
+  private onSave: () => void;
+
+  constructor(
+    app: App,
+    plugin: BibleStudyPlugin,
+    onSave: () => void,
+    existingNote: BibleNote | null = null,
+    prefill: NoteModalPrefill | null = null,
+  ) {
+    super(app);
+    this.plugin = plugin;
+    this.existingNote = existingNote;
+    this.prefill = prefill;
+    this.onSave = onSave;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("bible-note-modal");
+
+    const isEditing = this.existingNote !== null;
+    contentEl.createEl("h3", {
+      text: isEditing ? "Edit Note" : "New Note",
+      cls: "bible-modal-title",
+    });
+
+    // ── Scope section ──────────────────────────────────────────────────────────
+    contentEl.createEl("p", { text: "Link this note to:", cls: "bible-label" });
+
+    const books = this.plugin.db.getBookList();
+
+    const scopeRow = contentEl.createDiv("bible-note-scope-row");
+
+    // Scope type selector
+    const scopeSel = scopeRow.createEl("select", { cls: "bible-select" });
+    [
+      { value: "none",    text: "No specific reference" },
+      { value: "book",    text: "Whole book" },
+      { value: "chapter", text: "Chapter" },
+      { value: "verse",   text: "Verse / range" },
+    ].forEach(({ value, text }) => scopeSel.createEl("option", { value, text }));
+
+    // Sub-controls container (shown/hidden based on scope)
+    const subControls = contentEl.createDiv("bible-note-sub-controls");
+
+    // Book selector
+    const bookRow = subControls.createDiv("bible-row");
+    bookRow.createEl("label", { text: "Book", cls: "bible-label" });
+    const bookSel = bookRow.createEl("select", { cls: "bible-select" });
+    books.forEach((b) => bookSel.createEl("option", { text: b.book, value: String(b.id) }));
+
+    // Chapter row
+    const chapterRow = subControls.createDiv("bible-row");
+    chapterRow.createEl("label", { text: "Chapter", cls: "bible-label" });
+    const chapterSel = chapterRow.createEl("select", { cls: "bible-select-sm" });
+
+    // Verse range row
+    const verseRow = subControls.createDiv("bible-row bible-row-inline");
+    verseRow.createEl("label", { text: "Verses", cls: "bible-label" });
+    const verseStartSel = verseRow.createEl("select", { cls: "bible-select-sm" });
+    verseRow.createEl("span", { text: "–", cls: "bible-dash" });
+    const verseEndSel = verseRow.createEl("select", { cls: "bible-select-sm" });
+
+    const populateChapters = () => {
+      const bookId = parseInt(bookSel.value);
+      const count = this.plugin.db.getChapterCount(bookId);
+      chapterSel.empty();
+      for (let i = 1; i <= count; i++) chapterSel.createEl("option", { text: String(i), value: String(i) });
+      populateVerses();
+    };
+
+    const populateVerses = () => {
+      const bookId = parseInt(bookSel.value);
+      const chapter = parseInt(chapterSel.value);
+      const count = this.plugin.db.getVerseCount(this.plugin.settings.defaultTranslation, bookId, chapter);
+      verseStartSel.empty(); verseEndSel.empty();
+      for (let i = 1; i <= count; i++) {
+        verseStartSel.createEl("option", { text: String(i), value: String(i) });
+        verseEndSel.createEl("option", { text: String(i), value: String(i) });
+      }
+      verseEndSel.value = String(count);
+    };
+
+    bookSel.onchange = populateChapters;
+    chapterSel.onchange = populateVerses;
+    populateChapters();
+
+    const applyScope = (scope: string) => {
+      subControls.style.display = scope === "none" ? "none" : "";
+      chapterRow.style.display = (scope === "chapter" || scope === "verse") ? "" : "none";
+      verseRow.style.display = scope === "verse" ? "" : "none";
+    };
+    scopeSel.onchange = () => applyScope(scopeSel.value);
+
+    // ── Pre-fill values ────────────────────────────────────────────────────────
+    const source = isEditing ? this.existingNote! : null;
+    const pf = this.prefill;
+
+    if (source) {
+      if (source.book_id === null) {
+        scopeSel.value = "none";
+      } else if (source.chapter === null) {
+        scopeSel.value = "book";
+        bookSel.value = String(source.book_id);
+        populateChapters();
+      } else if (source.verse_start === null) {
+        scopeSel.value = "chapter";
+        bookSel.value = String(source.book_id);
+        populateChapters();
+        chapterSel.value = String(source.chapter);
+        populateVerses();
+      } else {
+        scopeSel.value = "verse";
+        bookSel.value = String(source.book_id);
+        populateChapters();
+        chapterSel.value = String(source.chapter);
+        populateVerses();
+        verseStartSel.value = String(source.verse_start);
+        verseEndSel.value = String(source.verse_end ?? source.verse_start);
+      }
+    } else if (pf) {
+      if (pf.book_id !== null) {
+        bookSel.value = String(pf.book_id);
+        populateChapters();
+        if (pf.chapter !== null) {
+          chapterSel.value = String(pf.chapter);
+          populateVerses();
+          if (pf.verse_start !== null) {
+            scopeSel.value = "verse";
+            verseStartSel.value = String(pf.verse_start);
+            verseEndSel.value = String(pf.verse_end ?? pf.verse_start);
+          } else {
+            scopeSel.value = "chapter";
+          }
+        } else {
+          scopeSel.value = "book";
+        }
+      }
+    }
+    applyScope(scopeSel.value);
+
+    // ── Note body ──────────────────────────────────────────────────────────────
+    contentEl.createEl("label", { text: "Note", cls: "bible-label" });
+    const textarea = contentEl.createEl("textarea", { cls: "bible-note-textarea" });
+    textarea.value = source?.body ?? "";
+    textarea.rows = 8;
+
+    // ── Tags ───────────────────────────────────────────────────────────────────
+    contentEl.createEl("label", { text: "Tags (comma-separated)", cls: "bible-label" });
+    const tagsInput = contentEl.createEl("input", {
+      type: "text",
+      cls: "bible-modal-input",
+      placeholder: "e.g. grace, faith, sermon",
+    });
+    tagsInput.value = source?.tags ?? "";
+
+    // ── Buttons ────────────────────────────────────────────────────────────────
+    const btnRow = contentEl.createDiv("bible-note-btn-row");
+
+    if (isEditing) {
+      const deleteBtn = btnRow.createEl("button", { text: "Delete", cls: "bible-btn bible-btn-danger" });
+      deleteBtn.onclick = () => {
+        this.plugin.db.deleteNote(this.existingNote!.id);
+        new Notice("Note deleted.");
+        this.onSave();
+        this.close();
+      };
+    }
+
+    const saveBtn = btnRow.createEl("button", {
+      text: isEditing ? "Save Changes" : "Save Note",
+      cls: "bible-btn",
+    });
+    saveBtn.onclick = () => {
+      const body = textarea.value.trim();
+      if (!body) { new Notice("Note body cannot be empty."); return; }
+
+      const scope = scopeSel.value;
+      const book_id   = scope !== "none" ? parseInt(bookSel.value) : null;
+      const chapter   = (scope === "chapter" || scope === "verse") ? parseInt(chapterSel.value) : null;
+      const verse_start = scope === "verse" ? parseInt(verseStartSel.value) : null;
+      const verse_end   = scope === "verse" ? parseInt(verseEndSel.value) : null;
+      const tags = tagsInput.value.trim() || null;
+
+      if (isEditing) {
+        // Update scope as well as body/tags
+        this.plugin.db.db.run(
+          `UPDATE notes SET body = ?, book_id = ?, chapter = ?, verse_start = ?, verse_end = ?, tags = ?, updated_at = datetime('now')
+           WHERE id = ?`,
+          [body, book_id, chapter, verse_start, verse_end, tags, this.existingNote!.id]
+        );
+        this.plugin.db.saveToDisk();
+        new Notice("Note saved.");
+      } else {
+        this.plugin.db.createNote({ body, book_id, chapter, verse_start, verse_end, tags });
+        new Notice("Note created.");
+      }
+
+      this.onSave();
+      this.close();
+    };
+
+    setTimeout(() => textarea.focus(), 50);
+  }
+
+  onClose(): void { this.contentEl.empty(); }
 }
 
 // ─── Quick Insert Modal ───────────────────────────────────────────────────────
@@ -220,7 +625,6 @@ class BibleQuickInsertModal extends Modal {
       lastParsed = parsed;
       lastVerses = verses;
 
-      // Show preview
       const refPart = parsed.endVerse > parsed.startVerse
         ? `${parsed.startVerse}–${parsed.endVerse}` : `${parsed.startVerse}`;
       const refLine = `${parsed.book.book} ${parsed.chapter}:${refPart} (${parsed.translation.toUpperCase()})`;
@@ -251,16 +655,21 @@ class BibleQuickInsertModal extends Modal {
     };
 
     insertBtn.onclick = doInsert;
-    // Focus the input after the modal renders
     setTimeout(() => input.focus(), 50);
   }
 
   onClose(): void { this.contentEl.empty(); }
 }
 
+// ─── Sidebar View ─────────────────────────────────────────────────────────────
+
+type TabMode = "passage" | "search" | "notes";
+
 class BibleStudyView extends ItemView {
   private plugin: BibleStudyPlugin;
-  private currentMode: "passage" | "search" = "passage";
+  private currentMode: TabMode = "passage";
+  // Notes tab state
+  private notesSearchQuery: string = "";
 
   constructor(leaf: WorkspaceLeaf, plugin: BibleStudyPlugin) {
     super(leaf);
@@ -284,31 +693,45 @@ class BibleStudyView extends ItemView {
 
     const tabs = container.createDiv("bible-tabs");
     const passageTab = tabs.createEl("button", { text: "Passage", cls: "bible-tab" });
-    const searchTab = tabs.createEl("button", { text: "Search", cls: "bible-tab" });
-    if (this.currentMode === "passage") passageTab.addClass("active");
-    else searchTab.addClass("active");
+    const searchTab  = tabs.createEl("button", { text: "Search",  cls: "bible-tab" });
+    const notesTab   = tabs.createEl("button", { text: "Notes",   cls: "bible-tab" });
+
+    const setActive = (mode: TabMode) => {
+      [passageTab, searchTab, notesTab].forEach((t) => t.removeClass("active"));
+      if (mode === "passage") passageTab.addClass("active");
+      else if (mode === "search") searchTab.addClass("active");
+      else notesTab.addClass("active");
+    };
+    setActive(this.currentMode);
 
     const body = container.createDiv("bible-body");
 
-    passageTab.onclick = () => {
-      this.currentMode = "passage";
-      passageTab.addClass("active"); searchTab.removeClass("active");
-      body.empty(); this.renderPassagePanel(body);
+    const switchTo = (mode: TabMode) => {
+      this.currentMode = mode;
+      setActive(mode);
+      body.empty();
+      if (!this.plugin.db.isLoaded()) {
+        body.createEl("p", { text: "⚠  No database loaded. Set the path in Settings → Bible.", cls: "bible-notice" });
+        return;
+      }
+      if (mode === "passage") this.renderPassagePanel(body);
+      else if (mode === "search") this.renderSearchPanel(body);
+      else this.renderNotesPanel(body);
     };
-    searchTab.onclick = () => {
-      this.currentMode = "search";
-      searchTab.addClass("active"); passageTab.removeClass("active");
-      body.empty(); this.renderSearchPanel(body);
-    };
+
+    passageTab.onclick = () => switchTo("passage");
+    searchTab.onclick  = () => switchTo("search");
+    notesTab.onclick   = () => switchTo("notes");
 
     if (!this.plugin.db.isLoaded()) {
       body.createEl("p", { text: "⚠  No database loaded. Set the path in Settings → Bible.", cls: "bible-notice" });
       return;
     }
 
-    if (this.currentMode === "passage") this.renderPassagePanel(body);
-    else this.renderSearchPanel(body);
+    switchTo(this.currentMode);
   }
+
+  // ── Passage Panel ────────────────────────────────────────────────────────────
 
   private renderPassagePanel(container: HTMLElement): void {
     const books = this.plugin.db.getBookList();
@@ -369,7 +792,8 @@ class BibleStudyView extends ItemView {
       const chapter = parseInt(chapterSel.value);
       const startVerse = parseInt(verseStartSel.value);
       const endVerse = parseInt(verseEndSel.value);
-      const bookName = books.find((b) => b.id === bookId)?.book ?? "";
+      const bookObj = books.find((b) => b.id === bookId);
+      const bookName = bookObj?.book ?? "";
 
       const verses = this.plugin.db.getPassage(translation, bookId, chapter, startVerse, endVerse);
       results.empty();
@@ -388,6 +812,9 @@ class BibleStudyView extends ItemView {
         vEl.createSpan({ text: " " + v.words });
       });
 
+      // ── Notes for this passage ─────────────────────────────────────────────
+      this.renderPassageNotes(results, bookId, bookName, chapter, startVerse, endVerse);
+
       const insertBtn = results.createEl("button", { text: "⬆  Insert into Note", cls: "bible-btn bible-insert-btn" });
       insertBtn.onclick = () => {
         const text = this.buildInsertText(bookName, chapter, startVerse, endVerse, translation, verses);
@@ -395,6 +822,57 @@ class BibleStudyView extends ItemView {
       };
     };
   }
+
+  private renderPassageNotes(
+    container: HTMLElement,
+    bookId: number, bookName: string,
+    chapter: number, startVerse: number, endVerse: number
+  ): void {
+    const notes = this.plugin.db.getNotesForPassage(bookId, chapter, startVerse, endVerse);
+
+    const notesSection = container.createDiv("bible-passage-notes");
+
+    const notesHeader = notesSection.createDiv("bible-passage-notes-header");
+    notesHeader.createEl("span", {
+      text: notes.length ? `📝 ${notes.length} note${notes.length === 1 ? "" : "s"}` : "📝 No notes",
+      cls: "bible-passage-notes-label",
+    });
+
+    const addBtn = notesHeader.createEl("button", { text: "+ Add Note", cls: "bible-btn-sm" });
+    addBtn.onclick = () => {
+      new BibleNoteModal(this.app, this.plugin, () => {
+        // Refresh notes section
+        notesSection.empty();
+        this.renderPassageNotes(container, bookId, bookName, chapter, startVerse, endVerse);
+      }, null, {
+        book_id: bookId, bookName, chapter, verse_start: startVerse, verse_end: endVerse,
+      }).open();
+    };
+
+    notes.forEach((note) => {
+      const card = notesSection.createDiv("bible-note-card");
+      const cardHeader = card.createDiv("bible-note-card-header");
+      cardHeader.createEl("span", { text: noteRefLabel(note, this.plugin.db.getBookList()), cls: "bible-note-card-ref" });
+      cardHeader.createEl("span", { text: shortDate(note.updated_at), cls: "bible-note-card-date" });
+
+      card.createEl("p", { text: note.body, cls: "bible-note-card-body" });
+      if (note.tags) {
+        const tagsEl = card.createDiv("bible-note-card-tags");
+        note.tags.split(",").map((t) => t.trim()).filter(Boolean).forEach((tag) => {
+          tagsEl.createEl("span", { text: tag, cls: "bible-note-tag" });
+        });
+      }
+      const editBtn = card.createEl("button", { text: "Edit", cls: "bible-btn-sm" });
+      editBtn.onclick = () => {
+        new BibleNoteModal(this.app, this.plugin, () => {
+          notesSection.empty();
+          this.renderPassageNotes(container, bookId, bookName, chapter, startVerse, endVerse);
+        }, note).open();
+      };
+    });
+  }
+
+  // ── Search Panel ─────────────────────────────────────────────────────────────
 
   private renderSearchPanel(container: HTMLElement): void {
     const row1 = container.createDiv("bible-row");
@@ -425,20 +903,99 @@ class BibleStudyView extends ItemView {
 
       hits.forEach((v) => {
         const item = results.createDiv("bible-search-result");
-        item.createEl("div", { text: `${v.book_name} ${v.chapter}:${v.verse}`, cls: "bible-search-ref" });
-        item.createEl("div", { text: v.words, cls: "bible-search-text" });
-        const insertBtn = item.createEl("button", { text: "Insert", cls: "bible-btn-sm" });
+        const refRow = item.createEl("div", { cls: "bible-search-ref" });
+        refRow.createEl("span", { text: `${v.book_name} ${v.chapter}:${v.verse}` });
+        const btnGroup = refRow.createDiv("bible-search-ref-btns");
+        const insertBtn = btnGroup.createEl("button", { text: "Insert", cls: "bible-btn-sm" });
         insertBtn.onclick = () => {
           const text = this.buildInsertText(v.book_name, v.chapter, v.verse, v.verse, translationSel.value,
             [{ book_id: v.book_id, chapter: v.chapter, verse: v.verse, words: v.words }]);
           this.insertIntoEditor(text);
         };
+        const noteBtn = btnGroup.createEl("button", { text: "Note", cls: "bible-btn-sm" });
+        noteBtn.onclick = () => {
+          const books = this.plugin.db.getBookList();
+          new BibleNoteModal(this.app, this.plugin, () => {}, null, {
+            book_id: v.book_id, bookName: v.book_name, chapter: v.chapter,
+            verse_start: v.verse, verse_end: v.verse,
+          }).open();
+        };
+        item.createEl("div", { text: v.words, cls: "bible-search-text" });
       });
     };
 
     searchBtn.onclick = doSearch;
     searchInput.addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
   }
+
+  // ── Notes Panel ──────────────────────────────────────────────────────────────
+
+  private renderNotesPanel(container: HTMLElement): void {
+    const books = this.plugin.db.getBookList();
+
+    // Toolbar
+    const toolbar = container.createDiv("bible-notes-toolbar");
+    const searchInput = toolbar.createEl("input", {
+      type: "text",
+      placeholder: "Search notes…",
+      cls: "bible-search-input",
+    });
+    searchInput.value = this.notesSearchQuery;
+
+    const newBtn = toolbar.createEl("button", { text: "+ New Note", cls: "bible-btn-sm" });
+
+    const list = container.createDiv("bible-notes-list");
+
+    const renderList = () => {
+      list.empty();
+      const query = searchInput.value.trim();
+      this.notesSearchQuery = query;
+      const notes = query ? this.plugin.db.searchNotes(query) : this.plugin.db.getAllNotes();
+
+      if (!notes.length) {
+        list.createEl("p", {
+          text: query ? "No notes match your search." : "No notes yet. Use \"+ New Note\" to create one.",
+          cls: "bible-empty",
+        });
+        return;
+      }
+
+      notes.forEach((note) => {
+        const card = list.createDiv("bible-note-card");
+        const cardHeader = card.createDiv("bible-note-card-header");
+        cardHeader.createEl("span", { text: noteRefLabel(note, books), cls: "bible-note-card-ref" });
+        cardHeader.createEl("span", { text: shortDate(note.updated_at), cls: "bible-note-card-date" });
+
+        // Body preview (first 120 chars)
+        const preview = note.body.length > 120 ? note.body.slice(0, 120) + "…" : note.body;
+        card.createEl("p", { text: preview, cls: "bible-note-card-body" });
+
+        if (note.tags) {
+          const tagsEl = card.createDiv("bible-note-card-tags");
+          note.tags.split(",").map((t) => t.trim()).filter(Boolean).forEach((tag) => {
+            tagsEl.createEl("span", { text: tag, cls: "bible-note-tag" });
+          });
+        }
+
+        const cardFooter = card.createDiv("bible-note-card-footer");
+        const editBtn = cardFooter.createEl("button", { text: "Edit", cls: "bible-btn-sm" });
+        editBtn.onclick = () => new BibleNoteModal(this.app, this.plugin, renderList, note).open();
+
+        const insertBtn = cardFooter.createEl("button", { text: "Copy to Note", cls: "bible-btn-sm" });
+        insertBtn.onclick = () => {
+          const label = noteRefLabel(note, books);
+          const text = label !== "Whole Bible" ? `📝 **${label}** — ${note.body}\n` : `📝 ${note.body}\n`;
+          this.insertIntoEditor(text);
+        };
+      });
+    };
+
+    newBtn.onclick = () => new BibleNoteModal(this.app, this.plugin, renderList).open();
+    searchInput.addEventListener("input", renderList);
+    renderList();
+  }
+
+  // ── Shared helpers ────────────────────────────────────────────────────────────
 
   private buildInsertText(bookName: string, chapter: number, startVerse: number, endVerse: number, translation: string, verses: BibleVerse[]): string {
     const refPart = endVerse > startVerse ? `${startVerse}–${endVerse}` : `${startVerse}`;
@@ -453,12 +1010,14 @@ class BibleStudyView extends ItemView {
     const view = leaf.view;
     if (view instanceof MarkdownView && view.editor) {
       view.editor.replaceRange(text, view.editor.getCursor());
-      new Notice("Passage inserted.");
+      new Notice("Inserted.");
     } else {
       new Notice("Please open a Markdown note to insert into.");
     }
   }
 }
+
+// ─── Settings Tab ─────────────────────────────────────────────────────────────
 
 class BibleSettingTab extends PluginSettingTab {
   plugin: BibleStudyPlugin;
@@ -469,7 +1028,6 @@ class BibleSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "Bible Settings" });
 
-    // Show the resolved default path so the user can confirm it looks right
     const adapter = this.plugin.app.vault.adapter as any;
     const basePath = adapter.basePath ?? adapter.getBasePath?.() ?? adapter.fs?.basePath ?? "(could not resolve vault path)";
     const resolvedDefault = path.join(basePath, ".obsidian", "plugins", "lightworx-bible", "data", "bible.db");
@@ -505,6 +1063,8 @@ class BibleSettingTab extends PluginSettingTab {
   }
 }
 
+// ─── Plugin Entry Point ───────────────────────────────────────────────────────
+
 export default class BibleStudyPlugin extends Plugin {
   settings!: BiblePluginSettings;
   db: BibleDatabase = new BibleDatabase();
@@ -516,7 +1076,6 @@ export default class BibleStudyPlugin extends Plugin {
     this.addRibbonIcon("book-open", "Bible", () => this.activateSidebar());
     this.addCommand({ id: "open-bible-sidebar", name: "Open Bible Sidebar", callback: () => this.activateSidebar() });
 
-    // Command 1: Quick insert modal — assign a hotkey in Settings → Hotkeys
     this.addCommand({
       id: "bible-quick-insert",
       name: "Quick insert Bible passage",
@@ -526,7 +1085,6 @@ export default class BibleStudyPlugin extends Plugin {
       },
     });
 
-    // Command 2: Expand {{reference}} tags already typed in the note
     this.addCommand({
       id: "bible-expand-refs",
       name: "Expand {{Bible references}} in note",
@@ -535,6 +1093,7 @@ export default class BibleStudyPlugin extends Plugin {
         this.expandBibleRefs(editor);
       },
     });
+
     this.addSettingTab(new BibleSettingTab(this.app, this));
   }
 
@@ -544,8 +1103,7 @@ export default class BibleStudyPlugin extends Plugin {
     const adapter = this.app.vault.adapter as any;
     const basePath = adapter.basePath ?? adapter.getBasePath?.() ?? adapter.fs?.basePath ?? "";
     const pluginDir = path.join(basePath, ".obsidian", "plugins", "lightworx-bible");
-    const dbPath = this.settings.dbPath ||
-      path.join(pluginDir, "data", "bible.db");
+    const dbPath = this.settings.dbPath || path.join(pluginDir, "data", "bible.db");
     console.log("Bible plugin: attempting to load DB from:", dbPath);
     try {
       await this.db.load(pluginDir, dbPath);
@@ -578,20 +1136,16 @@ export default class BibleStudyPlugin extends Plugin {
     let match: RegExpExecArray | null;
     let newContent = content;
     let count = 0;
-
-    // Collect all matches first (replacing as we go would shift offsets)
     const replacements: { original: string; replacement: string }[] = [];
 
     while ((match = pattern.exec(content)) !== null) {
       const original = match[0];
       const parsed = parseReference(original, this.db.getBookList(), this.settings.defaultTranslation);
       if (!parsed) continue;
-
       const verses = this.db.getPassage(
         parsed.translation, parsed.book.id, parsed.chapter, parsed.startVerse, parsed.endVerse
       );
       if (!verses.length) continue;
-
       const refPart = parsed.endVerse > parsed.startVerse
         ? `${parsed.startVerse}–${parsed.endVerse}` : `${parsed.startVerse}`;
       const ref = `${parsed.book.book} ${parsed.chapter}:${refPart} (${parsed.translation.toUpperCase()})`;
@@ -601,12 +1155,9 @@ export default class BibleStudyPlugin extends Plugin {
     }
 
     if (!count) { new Notice("No {{Bible references}} found in this note."); return; }
-
-    // Apply replacements (replace all occurrences of each tag)
     for (const { original, replacement } of replacements) {
       newContent = newContent.split(original).join(replacement);
     }
-
     editor.setValue(newContent);
     new Notice(`Expanded ${count} Bible reference${count === 1 ? "" : "s"}.`);
   }
