@@ -50,7 +50,7 @@ const DEFAULT_SETTINGS: BiblePluginSettings = {
   defaultTranslation: "niv",
 };
 
-const TRANSLATIONS = ["gnt", "niv"];
+const TRANSLATIONS = ["gnt", "niv", "ceb", "msg"] as const;
 const VIEW_TYPE = "bible-study-view";
 
 // ─── Database ─────────────────────────────────────────────────────────────────
