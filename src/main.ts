@@ -239,6 +239,59 @@ class BibleDatabase {
     return res[0].values.map(this.rowToNote);
   }
 
+  /** Split notes for a passage into three independent scope tiers. */
+  getPassageNotesByScope(bookId: number, chapter: number, startVerse: number, endVerse: number): {
+    bookNotes: BibleNote[];
+    chapterNotes: BibleNote[];
+    verseNotes: Map<number, BibleNote[]>;
+  } {
+    if (!this.db) return { bookNotes: [], chapterNotes: [], verseNotes: new Map() };
+
+    // Book-level: chapter IS NULL (and not whole-Bible, which we ignore here)
+    const bookRes = this.db.exec(`
+      SELECT id, body, book_id, chapter, verse_start, verse_end, tags, created_at, updated_at
+      FROM notes
+      WHERE book_id = ${bookId} AND chapter IS NULL
+      ORDER BY updated_at DESC
+    `);
+    const bookNotes: BibleNote[] = bookRes.length ? bookRes[0].values.map(this.rowToNote) : [];
+
+    // Chapter-level: chapter matches AND verse_start IS NULL
+    const chapRes = this.db.exec(`
+      SELECT id, body, book_id, chapter, verse_start, verse_end, tags, created_at, updated_at
+      FROM notes
+      WHERE book_id = ${bookId} AND chapter = ${chapter} AND verse_start IS NULL
+      ORDER BY updated_at DESC
+    `);
+    const chapterNotes: BibleNote[] = chapRes.length ? chapRes[0].values.map(this.rowToNote) : [];
+
+    // Verse-level: verse_start IS NOT NULL, overlapping the displayed range
+    const verseRes = this.db.exec(`
+      SELECT id, body, book_id, chapter, verse_start, verse_end, tags, created_at, updated_at
+      FROM notes
+      WHERE book_id = ${bookId} AND chapter = ${chapter}
+        AND verse_start IS NOT NULL
+        AND verse_start <= ${endVerse}
+        AND (verse_end IS NULL OR verse_end >= ${startVerse})
+      ORDER BY verse_start ASC, updated_at DESC
+    `);
+    const verseNotes = new Map<number, BibleNote[]>();
+    if (verseRes.length) {
+      verseRes[0].values.forEach((r: any[]) => {
+        const note = this.rowToNote(r);
+        const vs = note.verse_start!;
+        const ve = note.verse_end ?? vs;
+        // Attach this note to every verse number it covers within the displayed range
+        for (let vn = Math.max(vs, startVerse); vn <= Math.min(ve, endVerse); vn++) {
+          if (!verseNotes.has(vn)) verseNotes.set(vn, []);
+          verseNotes.get(vn)!.push(note);
+        }
+      });
+    }
+
+    return { bookNotes, chapterNotes, verseNotes };
+  }
+
   getNotesForBook(bookId: number): BibleNote[] {
     if (!this.db) return [];
     const res = this.db.exec(`
@@ -802,58 +855,75 @@ class BibleStudyView extends ItemView {
         results.createEl("p", { text: "No verses found.", cls: "bible-empty" }); return;
       }
 
-      const refLine = `${bookName} ${chapter}:${startVerse}${endVerse > startVerse ? `–${endVerse}` : ""} (${translation.toUpperCase()})`;
-      results.createEl("div", { text: refLine, cls: "bible-ref" });
+      // ── Fetch notes pre-split by scope ──────────────────────────────────────
+      const { bookNotes, chapterNotes, verseNotes } =
+        this.plugin.db.getPassageNotesByScope(bookId, chapter, startVerse, endVerse);
 
+      // ── Build the heading from individual spans so book/chapter can be badged ─
+      const refEl = results.createDiv("bible-ref");
+
+      // Book name span — badge if book-level notes exist
+      const bookSpan = refEl.createEl("span", {
+        text: bookName,
+        cls: bookNotes.length ? "bible-ref-part bible-ref-part--noted" : "bible-ref-part",
+      });
+      if (bookNotes.length) {
+        const tt = refEl.createDiv("bible-ref-tooltip");
+        this.buildTooltipContent(tt, bookNotes, books);
+        bookSpan.addEventListener("mouseenter", () => tt.addClass("bible-verse-tooltip--visible"));
+        bookSpan.addEventListener("mouseleave", () => tt.removeClass("bible-verse-tooltip--visible"));
+        bookSpan.onclick = (e) => {
+          e.stopPropagation();
+          new BibleNoteModal(this.app, this.plugin, () => lookupBtn.click(), bookNotes[0]).open();
+        };
+      }
+
+      refEl.createEl("span", { text: " " });
+
+      // Chapter number span — badge if chapter-level notes exist
+      const chapterLabel = `${chapter}:${startVerse}${endVerse > startVerse ? `–${endVerse}` : ""}`;
+      const chapterSpan = refEl.createEl("span", {
+        text: chapterLabel,
+        cls: chapterNotes.length ? "bible-ref-part bible-ref-part--noted" : "bible-ref-part",
+      });
+      if (chapterNotes.length) {
+        const tt = refEl.createDiv("bible-ref-tooltip");
+        this.buildTooltipContent(tt, chapterNotes, books);
+        chapterSpan.addEventListener("mouseenter", () => tt.addClass("bible-verse-tooltip--visible"));
+        chapterSpan.addEventListener("mouseleave", () => tt.removeClass("bible-verse-tooltip--visible"));
+        chapterSpan.onclick = (e) => {
+          e.stopPropagation();
+          new BibleNoteModal(this.app, this.plugin, () => lookupBtn.click(), chapterNotes[0]).open();
+        };
+      }
+
+      refEl.createEl("span", { text: ` (${translation.toUpperCase()})` });
+
+      // ── Verse block ──────────────────────────────────────────────────────────
       const block = results.createDiv("bible-verse-block");
       verses.forEach((v) => {
-        const verseNotes = this.plugin.db.getNotesForVerse(bookId, chapter, v.verse);
         const vEl = block.createDiv("bible-verse");
+        const vNotes = verseNotes.get(v.verse) ?? [];
 
-        // Give the verse number a distinct style + behaviour when notes exist
         const numEl = vEl.createEl("sup", {
           text: String(v.verse),
-          cls: verseNotes.length
-            ? "bible-verse-num bible-verse-num--noted"
-            : "bible-verse-num",
+          cls: vNotes.length ? "bible-verse-num bible-verse-num--noted" : "bible-verse-num",
         });
         vEl.createSpan({ text: " " + v.words });
 
-        if (verseNotes.length) {
-          // Custom DOM tooltip — native title= is suppressed in Electron/Obsidian
+        if (vNotes.length) {
           const tooltip = vEl.createDiv("bible-verse-tooltip");
-          verseNotes.forEach((n, i) => {
-            if (i > 0) tooltip.createEl("hr", { cls: "bible-verse-tooltip-divider" });
-            tooltip.createEl("div", {
-              text: noteRefLabel(n, books),
-              cls: "bible-verse-tooltip-ref",
-            });
-            tooltip.createEl("div", { text: n.body, cls: "bible-verse-tooltip-body" });
-            if (n.tags) {
-              const tagLine = n.tags
-                .split(",")
-                .map((t: string) => t.trim())
-                .filter(Boolean)
-                .map((t: string) => "#" + t)
-                .join("  ");
-              tooltip.createEl("div", { text: tagLine, cls: "bible-verse-tooltip-tags" });
-            }
-          });
-
+          this.buildTooltipContent(tooltip, vNotes, books);
           numEl.addEventListener("mouseenter", () => tooltip.addClass("bible-verse-tooltip--visible"));
           numEl.addEventListener("mouseleave", () => tooltip.removeClass("bible-verse-tooltip--visible"));
-
           numEl.onclick = (e) => {
             e.stopPropagation();
-            const target = verseNotes.find((n) => n.verse_start !== null) ?? verseNotes[0];
-            new BibleNoteModal(this.app, this.plugin, () => {
-              lookupBtn.click();
-            }, target).open();
+            new BibleNoteModal(this.app, this.plugin, () => lookupBtn.click(), vNotes[0]).open();
           };
         }
       });
 
-      // ── Notes for this passage ─────────────────────────────────────────────
+      // ── Notes panel below verses ─────────────────────────────────────────────
       this.renderPassageNotes(results, bookId, bookName, chapter, startVerse, endVerse);
 
       const insertBtn = results.createEl("button", { text: "⬆  Insert into Note", cls: "bible-btn bible-insert-btn" });
@@ -862,6 +932,24 @@ class BibleStudyView extends ItemView {
         this.insertIntoEditor(text);
       };
     };
+  }
+
+  /** Populate a tooltip div with note content rows. */
+  private buildTooltipContent(tooltip: HTMLElement, notes: BibleNote[], books: Book[]): void {
+    notes.forEach((n, i) => {
+      if (i > 0) tooltip.createEl("hr", { cls: "bible-verse-tooltip-divider" });
+      tooltip.createEl("div", { text: noteRefLabel(n, books), cls: "bible-verse-tooltip-ref" });
+      tooltip.createEl("div", { text: n.body, cls: "bible-verse-tooltip-body" });
+      if (n.tags) {
+        const tagLine = n.tags
+          .split(",")
+          .map((t: string) => t.trim())
+          .filter(Boolean)
+          .map((t: string) => "#" + t)
+          .join("  ");
+        tooltip.createEl("div", { text: tagLine, cls: "bible-verse-tooltip-tags" });
+      }
+    });
   }
 
   private renderPassageNotes(

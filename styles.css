@@ -203,6 +203,55 @@
   letter-spacing: 0.04em;
   padding: 4px 0;
   border-bottom: 1px solid var(--background-modifier-border);
+  /* Allow inline-badge spans and position tooltip anchors */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0;
+  position: relative;
+}
+
+/* Plain text segment inside the heading */
+.bible-ref-part {
+  color: var(--text-accent);
+}
+
+/* Heading segment that has a note — underlined + cursor hint */
+.bible-ref-part--noted {
+  color: var(--color-orange);
+  text-decoration: underline dotted 1.5px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.bible-ref-part--noted:hover {
+  opacity: 0.75;
+}
+
+/* Tooltip anchored to the heading (same visual as verse tooltip) */
+.bible-ref-tooltip {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 100;
+  width: min(280px, 90vw);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  padding: 10px 12px;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
+.bible-ref-tooltip.bible-verse-tooltip--visible {
+  display: flex !important;
 }
 
 .bible-verse-block {
