@@ -657,3 +657,75 @@
 .bible-note-btn-row .bible-btn:not(.bible-btn-danger) {
   flex: 1;
 }
+
+/* ── Notes tab filter row & toggle switch ─────────────── */
+
+.bible-notes-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 2px;
+}
+
+/* Hide the native checkbox */
+.bible-toggle-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* The label wraps input + track, making the whole track clickable */
+.bible-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.bible-toggle-label:has(.bible-toggle-input:disabled) {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The visible pill track */
+.bible-toggle-track {
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  background: var(--background-modifier-border);
+  border-radius: 9px;
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+/* The thumb */
+.bible-toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: var(--background-primary);
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+/* Checked state */
+.bible-toggle-input:checked + .bible-toggle-track {
+  background: var(--interactive-accent);
+}
+
+.bible-toggle-input:checked + .bible-toggle-track::after {
+  transform: translateX(14px);
+}
+
+.bible-toggle-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
