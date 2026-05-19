@@ -995,7 +995,7 @@ class BibleStudyView extends ItemView {
 
       if (!notes.length) {
         list.createEl("p", {
-          text: query ? "No notes match your search." : "No notes yet. Use "+ New Note" to create one.",
+          text: query ? "No notes match your search." : "No notes yet. Use \"+ New Note\" to create one.",
           cls: "bible-empty",
         });
         return;
