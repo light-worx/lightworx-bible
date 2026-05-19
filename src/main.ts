@@ -809,18 +809,42 @@ class BibleStudyView extends ItemView {
       verses.forEach((v) => {
         const verseNotes = this.plugin.db.getNotesForVerse(bookId, chapter, v.verse);
         const vEl = block.createDiv("bible-verse");
-        vEl.createEl("sup", { text: String(v.verse), cls: "bible-verse-num" });
+
+        // Give the verse number a distinct style + behaviour when notes exist
+        const numEl = vEl.createEl("sup", {
+          text: String(v.verse),
+          cls: verseNotes.length
+            ? "bible-verse-num bible-verse-num--noted"
+            : "bible-verse-num",
+        });
         vEl.createSpan({ text: " " + v.words });
 
         if (verseNotes.length) {
-          const indicator = vEl.createEl("span", {
-            cls: "bible-verse-note-indicator",
-            title: verseNotes.map((n) => `📝 ${noteRefLabel(n, books)}\n${n.body}`).join("\n\n"),
+          // Custom DOM tooltip — native title= is suppressed in Electron/Obsidian
+          const tooltip = vEl.createDiv("bible-verse-tooltip");
+          verseNotes.forEach((n, i) => {
+            if (i > 0) tooltip.createEl("hr", { cls: "bible-verse-tooltip-divider" });
+            tooltip.createEl("div", {
+              text: noteRefLabel(n, books),
+              cls: "bible-verse-tooltip-ref",
+            });
+            tooltip.createEl("div", { text: n.body, cls: "bible-verse-tooltip-body" });
+            if (n.tags) {
+              const tagLine = n.tags
+                .split(",")
+                .map((t: string) => t.trim())
+                .filter(Boolean)
+                .map((t: string) => "#" + t)
+                .join("  ");
+              tooltip.createEl("div", { text: tagLine, cls: "bible-verse-tooltip-tags" });
+            }
           });
-          indicator.setText("📝");
-          indicator.onclick = (e) => {
+
+          numEl.addEventListener("mouseenter", () => tooltip.addClass("bible-verse-tooltip--visible"));
+          numEl.addEventListener("mouseleave", () => tooltip.removeClass("bible-verse-tooltip--visible"));
+
+          numEl.onclick = (e) => {
             e.stopPropagation();
-            // Open the first note for editing (most specific wins)
             const target = verseNotes.find((n) => n.verse_start !== null) ?? verseNotes[0];
             new BibleNoteModal(this.app, this.plugin, () => {
               lookupBtn.click();

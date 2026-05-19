@@ -219,6 +219,9 @@
   position: relative;
 }
 
+/* ── Verse number — annotated state & tooltip ──────────── */
+
+/* Default verse number */
 .bible-verse-num {
   font-size: 10px;
   font-weight: 700;
@@ -227,22 +230,80 @@
   margin-right: 1px;
 }
 
-/* ── Per-verse note indicator ──────────────────────────── */
-
-.bible-verse-note-indicator {
-  display: inline-block;
-  margin-left: 5px;
-  font-size: 11px;
-  opacity: 0.6;
+/* Verse number that has at least one note attached */
+.bible-verse-num--noted {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  padding: 0 3px;
+  height: 14px;
+  background: var(--color-orange);
+  color: #fff;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 800;
+  vertical-align: super;
+  margin-right: 3px;
   cursor: pointer;
-  vertical-align: middle;
   transition: opacity 0.15s, transform 0.1s;
-  /* native tooltip via title="" attribute */
+  line-height: 1;
 }
 
-.bible-verse-note-indicator:hover {
-  opacity: 1;
-  transform: scale(1.2);
+.bible-verse-num--noted:hover {
+  opacity: 0.85;
+  transform: scale(1.1);
+}
+
+/* Custom hover tooltip (positioned relative to .bible-verse) */
+.bible-verse-tooltip {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 100;
+  width: min(280px, 90vw);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  padding: 10px 12px;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.bible-verse-tooltip--visible {
+  display: flex !important;
+}
+
+.bible-verse-tooltip-divider {
+  border: none;
+  border-top: 1px solid var(--background-modifier-border);
+  margin: 6px 0;
+}
+
+.bible-verse-tooltip-ref {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-accent);
+  margin-bottom: 2px;
+}
+
+.bible-verse-tooltip-body {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-normal);
+  white-space: pre-wrap;
+}
+
+.bible-verse-tooltip-tags {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 4px;
 }
 
 /* Search results */
