@@ -50,7 +50,7 @@ const DEFAULT_SETTINGS: BiblePluginSettings = {
   defaultTranslation: "niv",
 };
 
-const TRANSLATIONS = ["gnt", "niv", "ceb", "msg"] as const;
+const TRANSLATIONS = ["gnt", "niv"];
 const VIEW_TYPE = "bible-study-view";
 
 // ─── Database ─────────────────────────────────────────────────────────────────
@@ -807,9 +807,26 @@ class BibleStudyView extends ItemView {
 
       const block = results.createDiv("bible-verse-block");
       verses.forEach((v) => {
+        const verseNotes = this.plugin.db.getNotesForVerse(bookId, chapter, v.verse);
         const vEl = block.createDiv("bible-verse");
         vEl.createEl("sup", { text: String(v.verse), cls: "bible-verse-num" });
         vEl.createSpan({ text: " " + v.words });
+
+        if (verseNotes.length) {
+          const indicator = vEl.createEl("span", {
+            cls: "bible-verse-note-indicator",
+            title: verseNotes.map((n) => `📝 ${noteRefLabel(n, books)}\n${n.body}`).join("\n\n"),
+          });
+          indicator.setText("📝");
+          indicator.onclick = (e) => {
+            e.stopPropagation();
+            // Open the first note for editing (most specific wins)
+            const target = verseNotes.find((n) => n.verse_start !== null) ?? verseNotes[0];
+            new BibleNoteModal(this.app, this.plugin, () => {
+              lookupBtn.click();
+            }, target).open();
+          };
+        }
       });
 
       // ── Notes for this passage ─────────────────────────────────────────────
@@ -954,7 +971,7 @@ class BibleStudyView extends ItemView {
 
       if (!notes.length) {
         list.createEl("p", {
-          text: query ? "No notes match your search." : "No notes yet. Use \"+ New Note\" to create one.",
+          text: query ? "No notes match your search." : "No notes yet. Use "+ New Note" to create one.",
           cls: "bible-empty",
         });
         return;

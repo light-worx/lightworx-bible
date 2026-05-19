@@ -168,6 +168,10 @@
   margin-top: 10px;
 }
 
+.bible-btn-danger {
+  background: var(--color-red);
+}
+
 .bible-btn-sm {
   padding: 3px 9px;
   background: var(--interactive-accent);
@@ -212,6 +216,7 @@
   font-size: 13.5px;
   line-height: 1.65;
   color: var(--text-normal);
+  position: relative;
 }
 
 .bible-verse-num {
@@ -220,6 +225,24 @@
   color: var(--text-accent);
   vertical-align: super;
   margin-right: 1px;
+}
+
+/* ── Per-verse note indicator ──────────────────────────── */
+
+.bible-verse-note-indicator {
+  display: inline-block;
+  margin-left: 5px;
+  font-size: 11px;
+  opacity: 0.6;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: opacity 0.15s, transform 0.1s;
+  /* native tooltip via title="" attribute */
+}
+
+.bible-verse-note-indicator:hover {
+  opacity: 1;
+  transform: scale(1.2);
 }
 
 /* Search results */
@@ -242,6 +265,11 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.bible-search-ref-btns {
+  display: flex;
+  gap: 4px;
 }
 
 .bible-search-text {
@@ -268,7 +296,123 @@
   padding: 16px 0;
 }
 
-/* ── Quick Insert Modal ────────────────────────────────────── */
+/* ── Passage notes section ─────────────────────────────── */
+
+.bible-passage-notes {
+  margin-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bible-passage-notes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.bible-passage-notes-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+/* ── Note Cards ────────────────────────────────────────── */
+
+.bible-note-card {
+  background: var(--background-secondary);
+  border-radius: 7px;
+  border-left: 3px solid var(--interactive-accent);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bible-note-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* Reference is the primary element — prominent */
+.bible-note-card-ref {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Date is secondary — quiet, doesn't compete */
+.bible-note-card-date {
+  font-size: 10px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bible-note-card-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-normal);
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.bible-note-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.bible-note-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  background: var(--background-modifier-hover);
+  border-radius: 10px;
+  color: var(--text-muted);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.bible-note-card-footer {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* ── Notes Tab toolbar ─────────────────────────────────── */
+
+.bible-notes-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.bible-notes-toolbar .bible-search-input {
+  flex: 1;
+}
+
+.bible-notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ── Quick Insert Modal ────────────────────────────────── */
 
 .bible-modal-title {
   margin: 0 0 6px;
@@ -323,4 +467,83 @@
 .bible-modal-btn {
   width: 100%;
   margin-top: 0;
+}
+
+/* ── New/Edit Note Modal ───────────────────────────────── */
+
+.bible-note-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 4px;
+}
+
+/* The scope-type dropdown sits on its own full-width row */
+.bible-note-scope-row {
+  width: 100%;
+}
+
+.bible-note-scope-row .bible-select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Sub-controls (book / chapter / verse selectors) */
+.bible-note-sub-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+}
+
+/* Full-width textarea for the note body */
+.bible-note-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--background-modifier-form-field);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  color: var(--text-normal);
+  font-family: var(--font-text);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 120px;
+}
+
+.bible-note-textarea:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb), 0.2);
+}
+
+/* Tags input (reuse modal-input sizing but smaller font) */
+.bible-note-modal .bible-modal-input {
+  font-size: 13px;
+  margin-bottom: 0;
+}
+
+/* Button row: delete on left, save on right */
+.bible-note-btn-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.bible-note-btn-row .bible-btn {
+  margin-top: 0;
+}
+
+.bible-note-btn-row .bible-btn-danger {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 7px 14px;
+}
+
+.bible-note-btn-row .bible-btn:not(.bible-btn-danger) {
+  flex: 1;
 }
