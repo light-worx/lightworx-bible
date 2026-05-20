@@ -43,11 +43,13 @@ interface BibleNote {
 interface BiblePluginSettings {
   dbPath: string;
   defaultTranslation: string;
+  insertMode: "cursor" | "clipboard";
 }
 
 const DEFAULT_SETTINGS: BiblePluginSettings = {
   dbPath: "",
   defaultTranslation: "niv",
+  insertMode: "clipboard",
 };
 
 const VIEW_TYPE = "bible-study-view";
@@ -765,7 +767,7 @@ class BibleQuickInsertModal extends Modal {
     const preview = contentEl.createDiv("bible-modal-preview");
 
     const insertBtn = contentEl.createEl("button", {
-      text: "Insert into Note",
+      text: this.plugin.settings.insertMode === "clipboard" ? "Copy to Clipboard" : "Insert into Note",
       cls: "bible-btn bible-modal-btn",
     });
     insertBtn.disabled = true;
@@ -825,8 +827,7 @@ class BibleQuickInsertModal extends Modal {
         ? `${lastParsed.startVerse}–${lastParsed.endVerse}` : `${lastParsed.startVerse}`;
       const ref = `${lastParsed.book.book} ${lastParsed.chapter}:${refPart} (${lastParsed.translation.toUpperCase()})`;
       const text = lastVerses.map((v) => `${v.verse} ${v.words}`).join(" ");
-      this.editor.replaceRange(`${ref}\n${text}\n`, this.editor.getCursor());
-      new Notice("Passage inserted.");
+      this.plugin.deliverText(`${ref}\n${text}\n`);
       this.close();
     };
 
@@ -1179,11 +1180,12 @@ class BibleStudyView extends ItemView {
       refEl.createEl("span", { text: `(${translation.toUpperCase()})`, cls: "bible-ref-translation" });
 
       // Insert button — right side of the header row
-      const insertBtn = refEl.createEl("button", { text: "Insert", cls: "bible-ref-insert-btn" });
+      const insertBtnLabel = this.plugin.settings.insertMode === "clipboard" ? "Copy" : "Insert";
+      const insertBtn = refEl.createEl("button", { text: insertBtnLabel, cls: "bible-ref-insert-btn" });
       insertBtn.onclick = (e) => {
         e.stopPropagation();
         const text = this.buildInsertText(bookName, chapter, startVerse, endVerse, translation, verses);
-        this.insertIntoEditor(text);
+        this.plugin.deliverText(text);
       };
 
       // ── Verse block ──────────────────────────────────────────────────────────
@@ -1363,7 +1365,7 @@ class BibleStudyView extends ItemView {
         insertBtn.onclick = () => {
           const text = this.buildInsertText(v.book_name, v.chapter, v.verse, v.verse, translationSel.value,
             [{ book_id: v.book_id, chapter: v.chapter, verse: v.verse, words: v.words }]);
-          this.insertIntoEditor(text);
+          this.plugin.deliverText(text);
         };
         const noteBtn = btnGroup.createEl("button", { text: "Note", cls: "bible-btn-sm" });
         noteBtn.onclick = () => {
@@ -1471,7 +1473,7 @@ class BibleStudyView extends ItemView {
           const text = label !== "Whole Bible"
             ? `📝 **${label}** — ${note.body}\n`
             : `📝 ${note.body}\n`;
-          this.insertIntoEditor(text);
+          this.plugin.deliverText(text);
         };
       });
     };
@@ -1500,15 +1502,23 @@ class BibleStudyView extends ItemView {
     return `${ref}\n${text}\n`;
   }
 
-  private insertIntoEditor(text: string): void {
-    const leaf = this.app.workspace.getMostRecentLeaf();
-    if (!leaf) { new Notice("No active editor found."); return; }
-    const view = leaf.view;
-    if (view instanceof MarkdownView && view.editor) {
-      view.editor.replaceRange(text, view.editor.getCursor());
-      new Notice("Inserted.");
+  deliverText(text: string): void {
+    if (this.settings.insertMode === "clipboard") {
+      navigator.clipboard.writeText(text).then(() => {
+        new Notice("Passage copied to clipboard.");
+      }).catch(() => {
+        new Notice("Could not copy to clipboard.");
+      });
     } else {
-      new Notice("Please open a Markdown note to insert into.");
+      const leaf = this.app.workspace.getMostRecentLeaf();
+      if (!leaf) { new Notice("No active editor found."); return; }
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.editor) {
+        view.editor.replaceRange(text, view.editor.getCursor());
+        new Notice("Passage inserted at cursor.");
+      } else {
+        new Notice("Please open a Markdown note to insert into.");
+      }
     }
   }
 }
@@ -1547,6 +1557,19 @@ class BibleSettingTab extends PluginSettingTab {
         this.plugin.db.getTranslations().forEach((t) => drop.addOption(t, t.toUpperCase()));
         drop.setValue(this.plugin.settings.defaultTranslation);
         drop.onChange(async (value) => { this.plugin.settings.defaultTranslation = value; await this.plugin.saveSettings(); });
+      });
+
+    new Setting(containerEl)
+      .setName("Passage insert mode")
+      .setDesc("Copy to clipboard: text is placed on your clipboard so you can paste wherever you like. Insert at cursor: text is inserted directly into the active note at the cursor position.")
+      .addDropdown((drop) => {
+        drop.addOption("clipboard", "Copy to clipboard");
+        drop.addOption("cursor", "Insert at cursor");
+        drop.setValue(this.plugin.settings.insertMode ?? "clipboard");
+        drop.onChange(async (value: "cursor" | "clipboard") => {
+          this.plugin.settings.insertMode = value;
+          await this.plugin.saveSettings();
+        });
       });
 
     new Setting(containerEl)
