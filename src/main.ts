@@ -1112,59 +1112,19 @@ class BibleStudyView extends ItemView {
     row3.createEl("span", { text: "–", cls: "bible-dash" });
     const verseEndSel = row3.createEl("select", { cls: "bible-select-sm" });
 
-    const populateVerses = () => {
-      const bookId = parseInt(bookSel.value);
-      const chapter = parseInt(chapterSel.value);
-      const translation = translationSel.value;
-      const count = this.plugin.db.getVerseCount(translation, bookId, chapter);
-      verseStartSel.empty(); verseEndSel.empty();
-      for (let i = 1; i <= count; i++) {
-        verseStartSel.createEl("option", { text: String(i), value: String(i) });
-        verseEndSel.createEl("option", { text: String(i), value: String(i) });
-      }
-      verseEndSel.value = String(count);
-    };
-
-    const populateChapters = () => {
-      const bookId = parseInt(bookSel.value);
-      const count = this.plugin.db.getChapterCount(bookId);
-      chapterSel.empty();
-      for (let i = 1; i <= count; i++) chapterSel.createEl("option", { text: String(i), value: String(i) });
-      populateVerses();
-    };
-
-    bookSel.onchange = populateChapters;
-    chapterSel.onchange = populateVerses;
-    translationSel.onchange = populateVerses;
-    populateChapters();
-
-    // Restore previous passage selection
-    if (this.currentPassage) {
-      const p = this.currentPassage;
-      translationSel.value = p.translation;
-      bookSel.value = String(p.bookId);
-      populateChapters();
-      chapterSel.value = String(p.chapter);
-      populateVerses();
-      verseStartSel.value = String(p.startVerse);
-      verseEndSel.value = String(p.endVerse);
-    }
-
-    const lookupBtn = container.createEl("button", { text: "Look Up Passage", cls: "bible-btn" });
     const results = container.createDiv("bible-results");
 
-    // Auto-run if a previous passage is stored
-    if (this.currentPassage) setTimeout(() => lookupBtn.click(), 0);
-
-    lookupBtn.onclick = () => {
+    // ── Core lookup — called any time a selector changes ─────────────────────
+    const doLookup = () => {
       const translation = translationSel.value;
       const bookId = parseInt(bookSel.value);
       const chapter = parseInt(chapterSel.value);
       const startVerse = parseInt(verseStartSel.value);
       const endVerse = parseInt(verseEndSel.value);
+      if (!translation || !bookId || !chapter || !startVerse || !endVerse) return;
+
       const bookObj = books.find((b) => b.id === bookId);
       const bookName = bookObj?.book ?? "";
-
       const verses = this.plugin.db.getPassage(translation, bookId, chapter, startVerse, endVerse);
       results.empty();
 
@@ -1175,14 +1135,13 @@ class BibleStudyView extends ItemView {
       // Persist so Notes tab can filter to it and it survives tab switches
       this.currentPassage = { translation, bookId, chapter, startVerse, endVerse };
 
-      // ── Fetch notes pre-split by scope ──────────────────────────────────────
+      // ── Notes pre-split by scope ─────────────────────────────────────────────
       const { bookNotes, chapterNotes, verseNotes } =
         this.plugin.db.getPassageNotesByScope(bookId, chapter, startVerse, endVerse);
 
-      // ── Build the heading from individual spans so book/chapter can be badged ─
+      // ── Heading with clickable book / chapter spans ──────────────────────────
       const refEl = results.createDiv("bible-ref");
 
-      // Book name span — badge if book-level notes exist
       const bookSpan = refEl.createEl("span", {
         text: bookName,
         cls: bookNotes.length ? "bible-ref-part bible-ref-part--noted" : "bible-ref-part",
@@ -1194,14 +1153,13 @@ class BibleStudyView extends ItemView {
         bookSpan.addEventListener("mouseleave", () => tt.removeClass("bible-verse-tooltip--visible"));
         bookSpan.onclick = (e) => {
           e.stopPropagation();
-          new BibleNoteModal(this.app, this.plugin, () => lookupBtn.click(), bookNotes[0]).open();
+          new BibleNoteModal(this.app, this.plugin, () => doLookup(), bookNotes[0]).open();
         };
       }
 
-      refEl.createEl("span", { text: " " });
+      refEl.createEl("span", { text: "\u2002", cls: "bible-ref-gap" });
 
-      // Chapter number span — badge if chapter-level notes exist
-      const chapterLabel = `${chapter}:${startVerse}${endVerse > startVerse ? `–${endVerse}` : ""}`;
+      const chapterLabel = `${chapter}:${startVerse}${endVerse > startVerse ? `\u2013${endVerse}` : ""}`;
       const chapterSpan = refEl.createEl("span", {
         text: chapterLabel,
         cls: chapterNotes.length ? "bible-ref-part bible-ref-part--noted" : "bible-ref-part",
@@ -1213,11 +1171,12 @@ class BibleStudyView extends ItemView {
         chapterSpan.addEventListener("mouseleave", () => tt.removeClass("bible-verse-tooltip--visible"));
         chapterSpan.onclick = (e) => {
           e.stopPropagation();
-          new BibleNoteModal(this.app, this.plugin, () => lookupBtn.click(), chapterNotes[0]).open();
+          new BibleNoteModal(this.app, this.plugin, () => doLookup(), chapterNotes[0]).open();
         };
       }
 
-      refEl.createEl("span", { text: ` (${translation.toUpperCase()})` });
+      refEl.createEl("span", { text: "\u2002", cls: "bible-ref-gap" });
+      refEl.createEl("span", { text: `(${translation.toUpperCase()})`, cls: "bible-ref-translation" });
 
       // ── Verse block ──────────────────────────────────────────────────────────
       const block = results.createDiv("bible-verse-block");
@@ -1238,7 +1197,7 @@ class BibleStudyView extends ItemView {
           numEl.addEventListener("mouseleave", () => tooltip.removeClass("bible-verse-tooltip--visible"));
           numEl.onclick = (e) => {
             e.stopPropagation();
-            new BibleNoteModal(this.app, this.plugin, () => lookupBtn.click(), vNotes[0]).open();
+            new BibleNoteModal(this.app, this.plugin, () => doLookup(), vNotes[0]).open();
           };
         }
       });
@@ -1252,6 +1211,52 @@ class BibleStudyView extends ItemView {
         this.insertIntoEditor(text);
       };
     };
+
+    // ── Populate helpers ─────────────────────────────────────────────────────
+    const populateVerses = (andLookup = true) => {
+      const bookId = parseInt(bookSel.value);
+      const chapter = parseInt(chapterSel.value);
+      const translation = translationSel.value;
+      const count = this.plugin.db.getVerseCount(translation, bookId, chapter);
+      verseStartSel.empty(); verseEndSel.empty();
+      for (let i = 1; i <= count; i++) {
+        verseStartSel.createEl("option", { text: String(i), value: String(i) });
+        verseEndSel.createEl("option", { text: String(i), value: String(i) });
+      }
+      verseEndSel.value = String(count);
+      if (andLookup) doLookup();
+    };
+
+    const populateChapters = (andLookup = true) => {
+      const bookId = parseInt(bookSel.value);
+      const count = this.plugin.db.getChapterCount(bookId);
+      chapterSel.empty();
+      for (let i = 1; i <= count; i++) chapterSel.createEl("option", { text: String(i), value: String(i) });
+      populateVerses(andLookup);
+    };
+
+    // ── Wire up change events ────────────────────────────────────────────────
+    bookSel.onchange = () => populateChapters(true);
+    chapterSel.onchange = () => populateVerses(true);
+    translationSel.onchange = () => populateVerses(true);
+    verseStartSel.onchange = doLookup;
+    verseEndSel.onchange = doLookup;
+
+    // ── Restore previous passage or default to Genesis 1 ────────────────────
+    if (this.currentPassage) {
+      const p = this.currentPassage;
+      translationSel.value = p.translation;
+      bookSel.value = String(p.bookId);
+      populateChapters(false);
+      chapterSel.value = String(p.chapter);
+      populateVerses(false);
+      verseStartSel.value = String(p.startVerse);
+      verseEndSel.value = String(p.endVerse);
+      doLookup();
+    } else {
+      // First open — default to Genesis 1, whole chapter
+      populateChapters(true);
+    }
   }
 
   /** Populate a tooltip div with note content rows. */

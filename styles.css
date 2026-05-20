@@ -201,9 +201,8 @@
   color: var(--text-accent);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 4px 0;
+  padding: 6px 0;
   border-bottom: 1px solid var(--background-modifier-border);
-  /* Allow inline-badge spans and position tooltip anchors */
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -218,11 +217,26 @@
 
 /* Heading segment that has a note — underlined + cursor hint */
 .bible-ref-part--noted {
-  color: var(--color-orange);
+  color: #4a90d9;
   text-decoration: underline dotted 1.5px;
   text-underline-offset: 3px;
   cursor: pointer;
   transition: opacity 0.15s;
+}
+
+
+/* En-space gap between heading segments */
+.bible-ref-gap {
+  display: inline-block;
+  width: 0.45em;
+}
+
+/* Translation badge in heading — slightly quieter than book/chapter */
+.bible-ref-translation {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.06em;
 }
 
 .bible-ref-part--noted:hover {
@@ -287,7 +301,7 @@
   min-width: 16px;
   padding: 0 3px;
   height: 14px;
-  background: var(--color-orange);
+  background: #4a90d9;
   color: #fff;
   border-radius: 4px;
   font-size: 9px;
