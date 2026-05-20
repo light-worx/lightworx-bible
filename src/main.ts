@@ -1178,6 +1178,14 @@ class BibleStudyView extends ItemView {
       refEl.createEl("span", { text: "\u2002", cls: "bible-ref-gap" });
       refEl.createEl("span", { text: `(${translation.toUpperCase()})`, cls: "bible-ref-translation" });
 
+      // Insert button — right side of the header row
+      const insertBtn = refEl.createEl("button", { text: "Insert", cls: "bible-ref-insert-btn" });
+      insertBtn.onclick = (e) => {
+        e.stopPropagation();
+        const text = this.buildInsertText(bookName, chapter, startVerse, endVerse, translation, verses);
+        this.insertIntoEditor(text);
+      };
+
       // ── Verse block ──────────────────────────────────────────────────────────
       const block = results.createDiv("bible-verse-block");
       verses.forEach((v) => {
@@ -1201,15 +1209,6 @@ class BibleStudyView extends ItemView {
           };
         }
       });
-
-      // ── Notes panel below verses ─────────────────────────────────────────────
-      this.renderPassageNotes(results, bookId, bookName, chapter, startVerse, endVerse);
-
-      const insertBtn = results.createEl("button", { text: "⬆  Insert into Note", cls: "bible-btn bible-insert-btn" });
-      insertBtn.onclick = () => {
-        const text = this.buildInsertText(bookName, chapter, startVerse, endVerse, translation, verses);
-        this.insertIntoEditor(text);
-      };
     };
 
     // ── Populate helpers ─────────────────────────────────────────────────────

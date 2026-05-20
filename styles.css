@@ -225,6 +225,29 @@
 }
 
 
+/* Insert button inside the passage heading row */
+.bible-ref-insert-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 2px 9px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  opacity: 0.85;
+  transition: opacity 0.15s;
+  align-self: center;
+}
+
+.bible-ref-insert-btn:hover {
+  opacity: 1;
+}
+
 /* En-space gap between heading segments */
 .bible-ref-gap {
   display: inline-block;
