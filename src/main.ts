@@ -50,7 +50,6 @@ const DEFAULT_SETTINGS: BiblePluginSettings = {
   defaultTranslation: "niv",
 };
 
-const TRANSLATIONS = ["gnt", "niv", "ceb", "msg" ];
 const VIEW_TYPE = "bible-study-view";
 
 // ─── Database ─────────────────────────────────────────────────────────────────
@@ -395,6 +394,68 @@ class BibleDatabase {
   close(): void {
     if (this.db) { this.db.close(); this.db = null; }
   }
+
+  // ── Import ───────────────────────────────────────────────────────────────────
+
+  /** Returns list of translation slugs that already have a verses table */
+  getInstalledTranslations(): string[] {
+    if (!this.db) return [];
+    const res = this.db.exec(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_verses'`
+    );
+    if (!res.length) return [];
+    return res[0].values.map((r: any[]) => (r[0] as string).replace("_verses", ""));
+  }
+
+  /** Alias used by UI — same as getInstalledTranslations but always returns at least [] */
+  getTranslations(): string[] {
+    return this.getInstalledTranslations();
+  }
+
+  importTranslation(
+    slug: string,
+    rows: { book_id: number; chapter: number; verse: number; words: string }[],
+    onProgress: (pct: number) => void
+  ): void {
+    if (!this.db) throw new Error("Database not loaded");
+    const table = `${slug.toLowerCase()}_verses`;
+
+    // Drop and recreate the table so re-importing replaces cleanly
+    this.db.run(`DROP TABLE IF EXISTS ${table}`);
+    this.db.run(`
+      CREATE TABLE ${table} (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL,
+        chapter INTEGER,
+        verse   INTEGER,
+        words   TEXT
+      )
+    `);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_${slug}_book_ch ON ${table}(book_id, chapter)`);
+
+    // Insert in batches of 500
+    const BATCH = 500;
+    const total = rows.length;
+    for (let i = 0; i < total; i += BATCH) {
+      const batch = rows.slice(i, i + BATCH);
+      const stmt = this.db.prepare(
+        `INSERT INTO ${table} (book_id, chapter, verse, words) VALUES (?, ?, ?, ?)`
+      );
+      for (const r of batch) {
+        stmt.run([r.book_id, r.chapter, r.verse, r.words]);
+      }
+      stmt.free();
+      onProgress(Math.round(((i + batch.length) / total) * 100));
+    }
+
+    this.saveToDisk();
+  }
+
+  deleteTranslation(slug: string): void {
+    if (!this.db) return;
+    this.db.run(`DROP TABLE IF EXISTS ${slug.toLowerCase()}_verses`);
+    this.saveToDisk();
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -407,9 +468,13 @@ interface ParsedRef {
   translation: string;
 }
 
-function parseReference(raw: string, books: Book[], defaultTranslation: string): ParsedRef | null {
+function parseReference(raw: string, books: Book[], defaultTranslation: string, translations?: string[]): ParsedRef | null {
   const s = raw.replace(/^\{\{|\}\}$/g, "").trim();
-  const transMatch = s.match(/\s+(GNT|NIV|CEB|MSG)$/i);
+  // Match any known translation suffix, or fall back to a generic 2-5 uppercase letter word
+  const transPattern = translations && translations.length
+    ? `(${translations.map(t => t.toUpperCase()).join("|")})`
+    : `([A-Z]{2,5})`;
+  const transMatch = s.match(new RegExp(`\\s+${transPattern}$`, "i"));
   const translation = transMatch ? transMatch[1].toLowerCase() : defaultTranslation;
   const refStr = transMatch ? s.slice(0, -transMatch[0].length).trim() : s;
   const m = refStr.match(/^(.+?)\s+(\d+):(\d+)(?:-(\d+))?$/);
@@ -718,7 +783,7 @@ class BibleQuickInsertModal extends Modal {
 
       if (!val) return;
 
-      const parsed = parseReference(val, this.plugin.db.getBookList(), this.plugin.settings.defaultTranslation);
+      const parsed = parseReference(val, this.plugin.db.getBookList(), this.plugin.settings.defaultTranslation, this.plugin.db.getTranslations());
       if (!parsed) {
         feedback.setText('⚠  Reference not recognised — try e.g. "John 3:16" or "Rom 8:1-4 GNT"');
         return;
@@ -770,6 +835,175 @@ class BibleQuickInsertModal extends Modal {
   }
 
   onClose(): void { this.contentEl.empty(); }
+}
+
+// ─── Import Modal ─────────────────────────────────────────────────────────────
+
+class BibleImportModal extends Modal {
+  private plugin: BibleStudyPlugin;
+  private onComplete: () => void;
+
+  constructor(app: App, plugin: BibleStudyPlugin, onComplete: () => void) {
+    super(app);
+    this.plugin = plugin;
+    this.onComplete = onComplete;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("bible-note-modal");
+    contentEl.createEl("h3", { text: "Import Bible Translation", cls: "bible-modal-title" });
+
+    // ── Instructions ──────────────────────────────────────────────────────────
+    const info = contentEl.createEl("p", { cls: "bible-modal-hint" });
+    info.innerHTML =
+      "Upload a <strong>CSV file</strong> with columns in this order:<br>" +
+      "<code>book_id, chapter, verse, text</code><br><br>" +
+      "The first row may be a header — it will be skipped if <code>book_id</code> is not a number. " +
+      "Book IDs must match those in your <code>books</code> table (Genesis = 1, etc.).";
+
+    // ── Translation slug ──────────────────────────────────────────────────────
+    const row1 = contentEl.createDiv("bible-row");
+    row1.createEl("label", { text: "Translation abbreviation (e.g. NIV, KJV, ESV)", cls: "bible-label" });
+    const slugInput = contentEl.createEl("input", {
+      type: "text",
+      placeholder: "NIV",
+      cls: "bible-modal-input",
+    });
+    slugInput.style.marginBottom = "0";
+    slugInput.style.textTransform = "uppercase";
+    slugInput.addEventListener("input", () => {
+      slugInput.value = slugInput.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    });
+
+    // Warn if translation already exists
+    const existsWarning = contentEl.createEl("p", { cls: "bible-modal-feedback" });
+    existsWarning.style.marginTop = "4px";
+    const checkExists = () => {
+      const slug = slugInput.value.toLowerCase();
+      const installed = this.plugin.db.getInstalledTranslations();
+      existsWarning.setText(
+        slug && installed.includes(slug)
+          ? `⚠  ${slug.toUpperCase()} is already installed — importing will replace it.`
+          : ""
+      );
+    };
+    slugInput.addEventListener("input", checkExists);
+
+    // ── File picker ───────────────────────────────────────────────────────────
+    const row2 = contentEl.createDiv("bible-row");
+    row2.createEl("label", { text: "CSV File", cls: "bible-label" });
+    const fileInput = row2.createEl("input", { type: "file" }) as HTMLInputElement;
+    (fileInput as any).accept = ".csv,text/csv";
+
+    const fileInfo = contentEl.createEl("p", { cls: "bible-modal-feedback" });
+
+    // ── Progress bar ──────────────────────────────────────────────────────────
+    const progressWrap = contentEl.createDiv();
+    progressWrap.style.cssText = "display:none; margin: 8px 0;";
+    const progressBar = progressWrap.createEl("progress") as HTMLProgressElement;
+    progressBar.max = 100;
+    progressBar.value = 0;
+    progressBar.style.cssText = "width:100%; height:12px;";
+    const progressLabel = progressWrap.createEl("p", { cls: "bible-modal-hint" });
+    progressLabel.style.margin = "4px 0 0";
+
+    // ── Import button ─────────────────────────────────────────────────────────
+    const importBtn = contentEl.createEl("button", {
+      text: "Import",
+      cls: "bible-btn bible-modal-btn",
+    });
+    importBtn.style.marginTop = "8px";
+
+    // Track parsed rows
+    let parsedRows: { book_id: number; chapter: number; verse: number; words: string }[] = [];
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const text = e.target?.result as string;
+        const lines = text.split(/\r?\n/).filter((l) => l.trim());
+        parsedRows = [];
+        let skipped = 0;
+
+        for (const line of lines) {
+          // Simple CSV split — handles quoted fields with commas inside
+          const cols = parseCsvLine(line);
+          if (cols.length < 4) { skipped++; continue; }
+          const book_id = parseInt(cols[0]);
+          const chapter = parseInt(cols[1]);
+          const verse   = parseInt(cols[2]);
+          const words   = cols.slice(3).join(",").replace(/^"|"$/g, "").trim();
+          if (isNaN(book_id) || isNaN(chapter) || isNaN(verse)) { skipped++; continue; }
+          parsedRows.push({ book_id, chapter, verse, words });
+        }
+
+        fileInfo.setText(
+          parsedRows.length
+            ? `✓  ${parsedRows.length.toLocaleString()} verses parsed${skipped ? ` (${skipped} rows skipped)` : ""}.`
+            : "⚠  No valid rows found. Check the file format."
+        );
+      };
+      reader.readAsText(file);
+    });
+
+    importBtn.onclick = async () => {
+      const slug = slugInput.value.trim().toLowerCase();
+      if (!slug) { new Notice("Please enter a translation abbreviation."); return; }
+      if (!parsedRows.length) { new Notice("Please select a valid CSV file first."); return; }
+
+      importBtn.disabled = true;
+      importBtn.setText("Importing…");
+      progressWrap.style.display = "";
+
+      // Yield to UI then run import
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+      try {
+        this.plugin.db.importTranslation(slug, parsedRows, (pct) => {
+          progressBar.value = pct;
+          progressLabel.setText(`Importing… ${pct}%`);
+        });
+
+        progressBar.value = 100;
+        progressLabel.setText("✓ Import complete.");
+        new Notice(`✓ ${slug.toUpperCase()} imported — ${parsedRows.length.toLocaleString()} verses.`);
+
+        // Refresh the sidebar so new translation appears in dropdowns
+        this.onComplete();
+        setTimeout(() => this.close(), 800);
+      } catch (e: any) {
+        new Notice(`Import failed: ${e?.message ?? e}`);
+        importBtn.disabled = false;
+        importBtn.setText("Import");
+      }
+    };
+  }
+
+  onClose(): void { this.contentEl.empty(); }
+}
+
+/** Minimal CSV line parser that handles double-quoted fields */
+function parseCsvLine(line: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+      else { inQuotes = !inQuotes; }
+    } else if (ch === "," && !inQuotes) {
+      result.push(current); current = "";
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current);
+  return result;
 }
 
 // ─── Sidebar View ─────────────────────────────────────────────────────────────
@@ -860,7 +1094,7 @@ class BibleStudyView extends ItemView {
     const row1 = container.createDiv("bible-row");
     row1.createEl("label", { text: "Translation", cls: "bible-label" });
     const translationSel = row1.createEl("select", { cls: "bible-select" });
-    TRANSLATIONS.forEach((t) => {
+    this.plugin.db.getTranslations().forEach((t) => {
       const opt = translationSel.createEl("option", { text: t.toUpperCase(), value: t });
       if (t === this.plugin.settings.defaultTranslation) opt.selected = true;
     });
@@ -1093,7 +1327,7 @@ class BibleStudyView extends ItemView {
     const row1 = container.createDiv("bible-row");
     row1.createEl("label", { text: "Translation", cls: "bible-label" });
     const translationSel = row1.createEl("select", { cls: "bible-select" });
-    TRANSLATIONS.forEach((t) => {
+    this.plugin.db.getTranslations().forEach((t) => {
       const opt = translationSel.createEl("option", { text: t.toUpperCase(), value: t });
       if (t === this.plugin.settings.defaultTranslation) opt.selected = true;
     });
@@ -1306,7 +1540,7 @@ class BibleSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Default Translation")
       .addDropdown((drop) => {
-        TRANSLATIONS.forEach((t) => drop.addOption(t, t.toUpperCase()));
+        this.plugin.db.getTranslations().forEach((t) => drop.addOption(t, t.toUpperCase()));
         drop.setValue(this.plugin.settings.defaultTranslation);
         drop.onChange(async (value) => { this.plugin.settings.defaultTranslation = value; await this.plugin.saveSettings(); });
       });
@@ -1317,6 +1551,44 @@ class BibleSettingTab extends PluginSettingTab {
       .addButton((btn) => btn.setButtonText("Reload").onClick(async () => {
         await this.plugin.loadDatabase();
         new Notice(this.plugin.db.isLoaded() ? "✓ Database loaded." : "✗ Failed — check the path shown above.");
+      }));
+
+    // ── Import ────────────────────────────────────────────────────────────────
+    containerEl.createEl("h3", { text: "Bible Translations" });
+
+    // Installed translations list
+    const renderInstalled = () => {
+      installedEl.empty();
+      if (!this.plugin.db.isLoaded()) {
+        installedEl.createEl("p", { text: "Load a database first.", cls: "setting-item-description" });
+        return;
+      }
+      const installed = this.plugin.db.getInstalledTranslations();
+      if (!installed.length) {
+        installedEl.createEl("p", { text: "No translations installed yet.", cls: "setting-item-description" });
+        return;
+      }
+      installed.forEach((slug) => {
+        const row = installedEl.createDiv({ cls: "bible-import-installed-row" });
+        row.createEl("span", { text: slug.toUpperCase(), cls: "bible-import-slug" });
+        const delBtn = row.createEl("button", { text: "Remove", cls: "bible-btn-sm bible-btn-sm--danger" });
+        delBtn.onclick = () => {
+          this.plugin.db.deleteTranslation(slug);
+          new Notice(`${slug.toUpperCase()} removed.`);
+          renderInstalled();
+        };
+      });
+    };
+
+    const installedEl = containerEl.createDiv("bible-import-installed");
+    renderInstalled();
+
+    new Setting(containerEl)
+      .setName("Import a translation from CSV")
+      .setDesc("CSV format: book_id, chapter, verse, text  (one verse per row)")
+      .addButton((btn) => btn.setButtonText("Open Import Wizard").onClick(() => {
+        if (!this.plugin.db.isLoaded()) { new Notice("Load a database first."); return; }
+        new BibleImportModal(this.app, this.plugin, () => renderInstalled()).open();
       }));
   }
 }
@@ -1398,7 +1670,7 @@ export default class BibleStudyPlugin extends Plugin {
 
     while ((match = pattern.exec(content)) !== null) {
       const original = match[0];
-      const parsed = parseReference(original, this.db.getBookList(), this.settings.defaultTranslation);
+      const parsed = parseReference(original, this.db.getBookList(), this.settings.defaultTranslation, this.db.getTranslations());
       if (!parsed) continue;
       const verses = this.db.getPassage(
         parsed.translation, parsed.book.id, parsed.chapter, parsed.startVerse, parsed.endVerse
