@@ -1045,10 +1045,10 @@ class BibleStudyView extends ItemView {
       translation,
       bookId,
       chapter,
-      startVerse: Math.max(1, verse - 2),   // show a couple of verses before for context
-      endVerse: verse + 2,                   // and after — user can widen from there
+      startVerse: Math.max(1, verse - 2),
+      endVerse: verse + 2,
     };
-    // Re-render so the passage tab picks up currentPassage
+    this.currentMode = "passage";
     this.render();
   }
 
