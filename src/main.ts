@@ -1504,11 +1504,30 @@ class BibleStudyView extends ItemView {
 
   deliverText(text: string): void {
     if (this.settings.insertMode === "clipboard") {
-      navigator.clipboard.writeText(text).then(() => {
+      try {
+        // In Obsidian's Electron renderer, clipboard is exposed via window.require
+        // or through the electron remote module
+        const electron =
+          (window as any).require?.("electron") ??
+          require("electron");
+        const clipboard = electron.clipboard ?? electron.remote?.clipboard;
+        if (clipboard) {
+          clipboard.writeText(text);
+          new Notice("Passage copied to clipboard.");
+        } else {
+          throw new Error("clipboard not available");
+        }
+      } catch {
+        // Final fallback: use a temporary textarea + execCommand
+        const el = document.createElement("textarea");
+        el.value = text;
+        el.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand("copy");
+        document.body.removeChild(el);
         new Notice("Passage copied to clipboard.");
-      }).catch(() => {
-        new Notice("Could not copy to clipboard.");
-      });
+      }
     } else {
       const leaf = this.app.workspace.getMostRecentLeaf();
       if (!leaf) { new Notice("No active editor found."); return; }
