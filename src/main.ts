@@ -1501,45 +1501,6 @@ class BibleStudyView extends ItemView {
     const text = verses.map((v) => `${v.verse} ${v.words}`).join(" ");
     return `${ref}\n${text}\n`;
   }
-
-  deliverText(text: string): void {
-    if (this.settings.insertMode === "clipboard") {
-      try {
-        // In Obsidian's Electron renderer, clipboard is exposed via window.require
-        // or through the electron remote module
-        const electron =
-          (window as any).require?.("electron") ??
-          require("electron");
-        const clipboard = electron.clipboard ?? electron.remote?.clipboard;
-        if (clipboard) {
-          clipboard.writeText(text);
-          new Notice("Passage copied to clipboard.");
-        } else {
-          throw new Error("clipboard not available");
-        }
-      } catch {
-        // Final fallback: use a temporary textarea + execCommand
-        const el = document.createElement("textarea");
-        el.value = text;
-        el.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
-        document.body.appendChild(el);
-        el.select();
-        document.execCommand("copy");
-        document.body.removeChild(el);
-        new Notice("Passage copied to clipboard.");
-      }
-    } else {
-      const leaf = this.app.workspace.getMostRecentLeaf();
-      if (!leaf) { new Notice("No active editor found."); return; }
-      const view = leaf.view;
-      if (view instanceof MarkdownView && view.editor) {
-        view.editor.replaceRange(text, view.editor.getCursor());
-        new Notice("Passage inserted at cursor.");
-      } else {
-        new Notice("Please open a Markdown note to insert into.");
-      }
-    }
-  }
 }
 
 // ─── Settings Tab ─────────────────────────────────────────────────────────────
@@ -1736,5 +1697,42 @@ export default class BibleStudyPlugin extends Plugin {
     }
     editor.setValue(newContent);
     new Notice(`Expanded ${count} Bible reference${count === 1 ? "" : "s"}.`);
+  }
+
+  deliverText(text: string): void {
+    if (this.settings.insertMode === "clipboard") {
+      try {
+        const electron =
+          (window as any).require?.("electron") ??
+          require("electron");
+        const clipboard = electron.clipboard ?? electron.remote?.clipboard;
+        if (clipboard) {
+          clipboard.writeText(text);
+          new Notice("Passage copied to clipboard.");
+        } else {
+          throw new Error("clipboard not available");
+        }
+      } catch {
+        // Fallback: hidden textarea + execCommand
+        const el = document.createElement("textarea");
+        el.value = text;
+        el.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand("copy");
+        document.body.removeChild(el);
+        new Notice("Passage copied to clipboard.");
+      }
+    } else {
+      const leaf = this.app.workspace.getMostRecentLeaf();
+      if (!leaf) { new Notice("No active editor found."); return; }
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.editor) {
+        view.editor.replaceRange(text, view.editor.getCursor());
+        new Notice("Passage inserted at cursor.");
+      } else {
+        new Notice("Please open a Markdown note to insert into.");
+      }
+    }
   }
 }
