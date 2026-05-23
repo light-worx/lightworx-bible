@@ -1,7 +1,7 @@
 {
   "id": "lightworx-bible",
   "name": "Bible",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "minAppVersion": "1.0.0",
   "description": "Look up and insert Bible passages from a local SQLite database.",
   "author": "Michael Bishop",

@@ -1039,6 +1039,19 @@ class BibleStudyView extends ItemView {
   async onOpen(): Promise<void> { this.render(); }
   async onClose(): Promise<void> {}
 
+  /** Switch to the Passage tab and open the given verse, defaulting to whole chapter */
+  navigateToPassage(bookId: number, chapter: number, verse: number, translation: string): void {
+    this.currentPassage = {
+      translation,
+      bookId,
+      chapter,
+      startVerse: Math.max(1, verse - 2),   // show a couple of verses before for context
+      endVerse: verse + 2,                   // and after — user can widen from there
+    };
+    // Re-render so the passage tab picks up currentPassage
+    this.render();
+  }
+
   render(): void {
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
@@ -1357,24 +1370,43 @@ class BibleStudyView extends ItemView {
       results.createEl("div", { text: `${hits.length} result${hits.length === 1 ? "" : "s"}`, cls: "bible-ref" });
 
       hits.forEach((v) => {
-        const item = results.createDiv("bible-search-result");
+        const item = results.createDiv("bible-search-result bible-search-result--clickable");
+        item.title = "Click to open in Passage tab";
+
         const refRow = item.createEl("div", { cls: "bible-search-ref" });
         refRow.createEl("span", { text: `${v.book_name} ${v.chapter}:${v.verse}` });
+
         const btnGroup = refRow.createDiv("bible-search-ref-btns");
+
+        // Open in passage tab
+        const openBtn = btnGroup.createEl("button", { text: "Open", cls: "bible-btn-sm bible-btn-sm--open" });
+        openBtn.title = "Open in Passage tab";
+        openBtn.onclick = (e) => {
+          e.stopPropagation();
+          this.navigateToPassage(v.book_id, v.chapter, v.verse, translationSel.value);
+        };
+
         const insertBtn = btnGroup.createEl("button", { text: "Insert", cls: "bible-btn-sm" });
-        insertBtn.onclick = () => {
+        insertBtn.onclick = (e) => {
+          e.stopPropagation();
           const text = this.buildInsertText(v.book_name, v.chapter, v.verse, v.verse, translationSel.value,
             [{ book_id: v.book_id, chapter: v.chapter, verse: v.verse, words: v.words }]);
           this.plugin.deliverText(text);
         };
         const noteBtn = btnGroup.createEl("button", { text: "Note", cls: "bible-btn-sm" });
-        noteBtn.onclick = () => {
-          const books = this.plugin.db.getBookList();
+        noteBtn.onclick = (e) => {
+          e.stopPropagation();
           new BibleNoteModal(this.app, this.plugin, () => {}, null, {
             book_id: v.book_id, bookName: v.book_name, chapter: v.chapter,
             verse_start: v.verse, verse_end: v.verse,
           }).open();
         };
+
+        // Clicking anywhere on the card (not a button) also opens in passage tab
+        item.onclick = () => {
+          this.navigateToPassage(v.book_id, v.chapter, v.verse, translationSel.value);
+        };
+
         item.createEl("div", { text: v.words, cls: "bible-search-text" });
       });
     };

@@ -799,3 +799,26 @@
 .bible-btn-sm--danger:hover {
   opacity: 0.85;
 }
+
+/* ── Clickable search results ──────────────────────────── */
+
+.bible-search-result--clickable {
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.bible-search-result--clickable:hover {
+  background: var(--background-modifier-hover);
+  border-left-color: var(--text-accent);
+}
+
+.bible-btn-sm--open {
+  background: var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+.bible-btn-sm--open:hover {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  opacity: 1;
+}
