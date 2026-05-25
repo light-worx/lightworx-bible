@@ -4,13 +4,13 @@ import {
   MarkdownView,
   Modal,
   Notice,
+  normalizePath,
   Plugin,
   PluginSettingTab,
   Setting,
   WorkspaceLeaf,
   ItemView,
 } from "obsidian";
-import * as path from "path";
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -59,16 +59,20 @@ const VIEW_TYPE = "bible-study-view";
 class BibleDatabase {
   private db: any = null;
   private books: Book[] = [];
-  private dbPath: string = "";
+  private adapter: any = null;
+  private dbVaultPath: string = ""; // vault-relative path e.g. ".obsidian/plugins/lightworx-bible/data/bible.db"
 
-  async load(pluginDir: string, dbPath: string): Promise<void> {
-    const fs = require("fs");
+  async load(adapter: any, dbVaultPath: string): Promise<void> {
+    this.adapter = adapter;
+    this.dbVaultPath = dbVaultPath;
+
     const initSqlJs = require("sql.js/dist/sql-wasm.js");
     const wasmBinary: Uint8Array = require("./sql-wasm.wasm");
     const SQL = await initSqlJs({ wasmBinary });
-    const fileBuffer = fs.readFileSync(dbPath);
-    this.db = new SQL.Database(fileBuffer);
-    this.dbPath = dbPath;
+
+    // readBinary works on both desktop and mobile via Obsidian's adapter
+    const fileBuffer = await adapter.readBinary(dbVaultPath);
+    this.db = new SQL.Database(new Uint8Array(fileBuffer));
     this.ensureNotesSchema();
     this.books = this.fetchBooks();
   }
@@ -91,19 +95,22 @@ class BibleDatabase {
         updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
+    // Don't await — schema save can be fire-and-forget on first run
     this.saveToDisk();
   }
 
   // ── Persistence ─────────────────────────────────────────────────────────────
 
   saveToDisk(): void {
-    if (!this.db || !this.dbPath) return;
-    const fs = require("fs");
+    if (!this.db || !this.adapter || !this.dbVaultPath) return;
     try {
       const data: Uint8Array = this.db.export();
-      fs.writeFileSync(this.dbPath, data);
+      // writeBinary is available on both desktop and mobile adapters
+      this.adapter.writeBinary(this.dbVaultPath, data.buffer).catch((e: any) => {
+        console.error("Bible plugin: failed to save DB", e);
+      });
     } catch (e: any) {
-      console.error("Bible plugin: failed to save DB", e);
+      console.error("Bible plugin: failed to export DB", e);
     }
   }
 
@@ -1546,17 +1553,15 @@ class BibleSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "Bible Settings" });
 
-    const adapter = this.plugin.app.vault.adapter as any;
-    const basePath = adapter.basePath ?? adapter.getBasePath?.() ?? adapter.fs?.basePath ?? "(could not resolve vault path)";
-    const resolvedDefault = path.join(basePath, ".obsidian", "plugins", "lightworx-bible", "data", "bible.db");
+    const defaultPath = normalizePath(".obsidian/plugins/lightworx-bible/data/bible.db");
     containerEl.createEl("p", {
-      text: `Resolved default path: ${resolvedDefault}`,
+      text: `Default path (vault-relative): ${defaultPath}`,
       cls: "setting-item-description",
     });
 
     new Setting(containerEl)
       .setName("SQLite Database Path")
-      .setDesc("Override the default path above. Leave blank to use the default.")
+      .setDesc("Vault-relative path to bible.db. Leave blank to use the default above.")
       .addText((text) => text
         .setPlaceholder("(using default path above)")
         .setValue(this.plugin.settings.dbPath)
@@ -1669,17 +1674,24 @@ export default class BibleStudyPlugin extends Plugin {
   async onunload(): Promise<void> { this.db.close(); }
 
   async loadDatabase(): Promise<void> {
-    const adapter = this.app.vault.adapter as any;
-    const basePath = adapter.basePath ?? adapter.getBasePath?.() ?? adapter.fs?.basePath ?? "";
-    const pluginDir = path.join(basePath, ".obsidian", "plugins", "lightworx-bible");
-    const dbPath = this.settings.dbPath || path.join(pluginDir, "data", "bible.db");
-    console.log("Bible plugin: attempting to load DB from:", dbPath);
+    const adapter = this.app.vault.adapter;
+    // Use a vault-relative path — works on both desktop and mobile
+    const defaultVaultPath = normalizePath(
+      `.obsidian/plugins/lightworx-bible/data/bible.db`
+    );
+    // If the user set a custom path assume it is also vault-relative;
+    // if they put an absolute path on desktop it will still be tried via the adapter
+    const dbVaultPath = this.settings.dbPath
+      ? normalizePath(this.settings.dbPath)
+      : defaultVaultPath;
+
+    console.log("Bible plugin: attempting to load DB from:", dbVaultPath);
     try {
-      await this.db.load(pluginDir, dbPath);
+      await this.db.load(adapter, dbVaultPath);
       console.log("Bible plugin: DB loaded successfully.");
     } catch (e: any) {
       console.error("Bible plugin: DB load error", e);
-      new Notice(`Bible plugin: could not load database.\nPath: ${dbPath}\nError: ${e?.message ?? e}`);
+      new Notice(`Bible plugin: could not load database.\nPath: ${dbVaultPath}\nError: ${e?.message ?? e}`);
     }
   }
 
@@ -1733,19 +1745,25 @@ export default class BibleStudyPlugin extends Plugin {
 
   deliverText(text: string): void {
     if (this.settings.insertMode === "clipboard") {
-      try {
-        const electron =
-          (window as any).require?.("electron") ??
-          require("electron");
-        const clipboard = electron.clipboard ?? electron.remote?.clipboard;
-        if (clipboard) {
-          clipboard.writeText(text);
-          new Notice("Passage copied to clipboard.");
-        } else {
-          throw new Error("clipboard not available");
+      // Try Electron clipboard (desktop), fall back to navigator.clipboard (mobile),
+      // then fall back to execCommand as last resort
+      const writeToClipboard = (): Promise<void> => {
+        // Desktop: Electron clipboard via window.require
+        try {
+          const electron = (window as any).require?.("electron");
+          const clipboard = electron?.clipboard ?? electron?.remote?.clipboard;
+          if (clipboard) {
+            clipboard.writeText(text);
+            return Promise.resolve();
+          }
+        } catch { /* not in Electron context */ }
+
+        // Mobile / web: navigator.clipboard (works in Obsidian mobile)
+        if (navigator?.clipboard?.writeText) {
+          return navigator.clipboard.writeText(text);
         }
-      } catch {
-        // Fallback: hidden textarea + execCommand
+
+        // Last resort: hidden textarea + execCommand
         const el = document.createElement("textarea");
         el.value = text;
         el.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
@@ -1753,8 +1771,12 @@ export default class BibleStudyPlugin extends Plugin {
         el.select();
         document.execCommand("copy");
         document.body.removeChild(el);
-        new Notice("Passage copied to clipboard.");
-      }
+        return Promise.resolve();
+      };
+
+      writeToClipboard()
+        .then(() => new Notice("Passage copied to clipboard."))
+        .catch(() => new Notice("Could not copy to clipboard."));
     } else {
       const leaf = this.app.workspace.getMostRecentLeaf();
       if (!leaf) { new Notice("No active editor found."); return; }
