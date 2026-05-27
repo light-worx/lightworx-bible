@@ -1128,16 +1128,20 @@ class BibleStudyView extends ItemView {
     const bookSel = bookWrap.createEl("select", { cls: "bible-select" });
     books.forEach((b) => bookSel.createEl("option", { text: b.book, value: String(b.id) }));
 
-    // ── Row 2: Ch. [sel] Verses [sel]–[sel]  [Copy/Insert] ──────────────────
+    // ── Row 2: [Ch.] [Vv.] – [Vv.]  [Copy/Insert] ───────────────────────────
     const row2 = container.createDiv("bible-row-inline bible-controls-row");
 
-    row2.createEl("label", { text: "Ch.", cls: "bible-label" });
-    const chapterSel = row2.createEl("select", { cls: "bible-select-sm" });
+    const chWrap = row2.createDiv("bible-ctrl-group");
+    chWrap.createEl("label", { text: "Ch.", cls: "bible-label" });
+    const chapterSel = chWrap.createEl("select", { cls: "bible-select-sm" });
 
-    row2.createEl("label", { text: "Vv.", cls: "bible-label" });
-    const verseStartSel = row2.createEl("select", { cls: "bible-select-sm" });
-    row2.createEl("span", { text: "–", cls: "bible-dash" });
-    const verseEndSel = row2.createEl("select", { cls: "bible-select-sm" });
+    const vsWrap = row2.createDiv("bible-ctrl-group");
+    vsWrap.createEl("label", { text: "From", cls: "bible-label" });
+    const verseStartSel = vsWrap.createEl("select", { cls: "bible-select-sm" });
+
+    const veWrap = row2.createDiv("bible-ctrl-group");
+    veWrap.createEl("label", { text: "To", cls: "bible-label" });
+    const verseEndSel = veWrap.createEl("select", { cls: "bible-select-sm" });
 
     // Copy/Insert button on the right of row 2
     const insertBtnLabel = this.plugin.settings.insertMode === "clipboard" ? "Copy" : "Insert";

@@ -201,11 +201,12 @@
   color: var(--text-accent);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 6px 0;
+  padding: 4px 0;
   border-bottom: 1px solid var(--background-modifier-border);
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
   gap: 0;
   position: relative;
 }
@@ -833,34 +834,6 @@
   width: 70px;
 }
 
-/* Prev / Next chapter nav buttons */
-.bible-chapter-nav {
-  flex-shrink: 0;
-  width: 24px;
-  height: 26px;
-  padding: 0;
-  background: var(--background-modifier-form-field);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 4px;
-  color: var(--text-muted);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-  align-self: flex-end;
-}
-
-.bible-chapter-nav:hover:not(:disabled) {
-  background: var(--interactive-accent);
-  color: var(--text-on-accent);
-  border-color: var(--interactive-accent);
-}
-
-.bible-chapter-nav:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
 /* Insert/Copy button when inlined in the controls row */
 .bible-ref-insert-btn--inline {
   align-self: flex-end;
@@ -890,20 +863,44 @@
   opacity: 1;
 }
 
-/* Nav buttons inside the passage heading row */
-.bible-chapter-nav--ref {
-  height: 20px;
-  width: 20px;
-  font-size: 13px;
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-muted);
-  align-self: center;
+/* Nav buttons inside the passage heading row — grow to fill available space */
+.bible-chapter-nav {
   flex-shrink: 0;
+  height: 26px;
+  padding: 0 8px;
+  background: var(--background-modifier-form-field);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.bible-chapter-nav:hover:not(:disabled) {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.bible-chapter-nav:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.bible-chapter-nav--ref {
+  flex: 1;
+  height: 24px;
+  font-size: 15px;
+  background: var(--background-modifier-form-field);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  color: var(--text-muted);
 }
 
 .bible-chapter-nav--ref:hover:not(:disabled) {
-  background: var(--background-modifier-hover);
-  border-color: var(--background-modifier-border);
-  color: var(--text-normal);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
 }
