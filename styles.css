@@ -897,6 +897,7 @@
   border: 1px solid var(--background-modifier-border);
   border-radius: 4px;
   color: var(--text-muted);
+  margin: 0 6px;
 }
 
 .bible-chapter-nav--ref:hover:not(:disabled) {
