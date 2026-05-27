@@ -1128,15 +1128,11 @@ class BibleStudyView extends ItemView {
     const bookSel = bookWrap.createEl("select", { cls: "bible-select" });
     books.forEach((b) => bookSel.createEl("option", { text: b.book, value: String(b.id) }));
 
-    // ── Row 2: ‹ Ch. [sel] › Verses [sel]–[sel]  [Copy/Insert] ──────────────
+    // ── Row 2: Ch. [sel] Verses [sel]–[sel]  [Copy/Insert] ──────────────────
     const row2 = container.createDiv("bible-row-inline bible-controls-row");
 
-    const prevBtn = row2.createEl("button", { text: "‹", cls: "bible-chapter-nav" });
-    prevBtn.title = "Previous chapter";
     row2.createEl("label", { text: "Ch.", cls: "bible-label" });
     const chapterSel = row2.createEl("select", { cls: "bible-select-sm" });
-    const nextBtn = row2.createEl("button", { text: "›", cls: "bible-chapter-nav" });
-    nextBtn.title = "Next chapter";
 
     row2.createEl("label", { text: "Vv.", cls: "bible-label" });
     const verseStartSel = row2.createEl("select", { cls: "bible-select-sm" });
@@ -1164,10 +1160,6 @@ class BibleStudyView extends ItemView {
       const verses = this.plugin.db.getPassage(translation, bookId, chapter, startVerse, endVerse);
       results.empty();
 
-      // Update nav button states
-      prevBtn.disabled = chapter <= 1;
-      nextBtn.disabled = chapter >= this.plugin.db.getChapterCount(bookId);
-
       if (!verses.length) {
         results.createEl("p", { text: "No verses found.", cls: "bible-empty" }); return;
       }
@@ -1185,8 +1177,18 @@ class BibleStudyView extends ItemView {
       const { bookNotes, chapterNotes, verseNotes } =
         this.plugin.db.getPassageNotesByScope(bookId, chapter, startVerse, endVerse);
 
-      // ── Heading: Book  Ch:Vv–Vv ───────────────────────────────────────────
+      // ── Heading: ‹ Book  Ch:Vv–Vv › ──────────────────────────────────────
       const refEl = results.createDiv("bible-ref");
+
+      const prevBtn = refEl.createEl("button", { text: "‹", cls: "bible-chapter-nav bible-chapter-nav--ref" });
+      prevBtn.title = "Previous chapter";
+      prevBtn.disabled = chapter <= 1;
+      prevBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (chapter <= 1) return;
+        chapterSel.value = String(chapter - 1);
+        populateVerses(true);
+      };
 
       const bookSpan = refEl.createEl("span", {
         text: bookName,
@@ -1220,6 +1222,18 @@ class BibleStudyView extends ItemView {
           new BibleNoteModal(this.app, this.plugin, () => doLookup(), chapterNotes[0]).open();
         };
       }
+
+      // Next chapter button — after the chapter:verse label
+      const nextBtn = refEl.createEl("button", { text: "›", cls: "bible-chapter-nav bible-chapter-nav--ref" });
+      nextBtn.title = "Next chapter";
+      nextBtn.disabled = chapter >= this.plugin.db.getChapterCount(bookId);
+      nextBtn.onclick = (e) => {
+        e.stopPropagation();
+        const max = this.plugin.db.getChapterCount(bookId);
+        if (chapter >= max) return;
+        chapterSel.value = String(chapter + 1);
+        populateVerses(true);
+      };
 
       // ── Verse block ────────────────────────────────────────────────────────
       const block = results.createDiv("bible-verse-block");
@@ -1265,21 +1279,6 @@ class BibleStudyView extends ItemView {
       chapterSel.empty();
       for (let i = 1; i <= count; i++) chapterSel.createEl("option", { text: String(i), value: String(i) });
       populateVerses(andLookup);
-    };
-
-    // ── Prev / Next chapter ──────────────────────────────────────────────────
-    prevBtn.onclick = () => {
-      const cur = parseInt(chapterSel.value);
-      if (cur <= 1) return;
-      chapterSel.value = String(cur - 1);
-      populateVerses(true);
-    };
-    nextBtn.onclick = () => {
-      const cur = parseInt(chapterSel.value);
-      const max = this.plugin.db.getChapterCount(parseInt(bookSel.value));
-      if (cur >= max) return;
-      chapterSel.value = String(cur + 1);
-      populateVerses(true);
     };
 
     // ── Wire up change events ────────────────────────────────────────────────

@@ -889,3 +889,21 @@
   color: var(--text-on-accent);
   opacity: 1;
 }
+
+/* Nav buttons inside the passage heading row */
+.bible-chapter-nav--ref {
+  height: 20px;
+  width: 20px;
+  font-size: 13px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+  align-self: center;
+  flex-shrink: 0;
+}
+
+.bible-chapter-nav--ref:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+  border-color: var(--background-modifier-border);
+  color: var(--text-normal);
+}
