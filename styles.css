@@ -800,6 +800,73 @@
   opacity: 0.85;
 }
 
+/* ── Compact passage controls ──────────────────────────── */
+
+.bible-controls-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+/* A labelled group stacks label above its control */
+.bible-ctrl-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+/* Book group stretches to fill remaining space */
+.bible-ctrl-group--book {
+  flex: 1;
+  min-width: 0;
+}
+
+.bible-ctrl-group--book .bible-select {
+  width: 100%;
+}
+
+/* Narrow translation select — just enough for 4-char abbrev */
+.bible-select--trans {
+  width: 70px;
+}
+
+/* Prev / Next chapter nav buttons */
+.bible-chapter-nav {
+  flex-shrink: 0;
+  width: 24px;
+  height: 26px;
+  padding: 0;
+  background: var(--background-modifier-form-field);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  align-self: flex-end;
+}
+
+.bible-chapter-nav:hover:not(:disabled) {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.bible-chapter-nav:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Insert/Copy button when inlined in the controls row */
+.bible-ref-insert-btn--inline {
+  align-self: flex-end;
+  flex-shrink: 0;
+}
+
 /* ── Clickable search results ──────────────────────────── */
 
 .bible-search-result--clickable {

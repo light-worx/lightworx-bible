@@ -1112,30 +1112,45 @@ class BibleStudyView extends ItemView {
   private renderPassagePanel(container: HTMLElement): void {
     const books = this.plugin.db.getBookList();
 
-    const row1 = container.createDiv("bible-row");
-    row1.createEl("label", { text: "Translation", cls: "bible-label" });
-    const translationSel = row1.createEl("select", { cls: "bible-select" });
+    // ── Row 1: Translation + Book side by side ───────────────────────────────
+    const row1 = container.createDiv("bible-row-inline bible-controls-row");
+
+    const transWrap = row1.createDiv("bible-ctrl-group");
+    transWrap.createEl("label", { text: "Trans.", cls: "bible-label" });
+    const translationSel = transWrap.createEl("select", { cls: "bible-select bible-select--trans" });
     this.plugin.db.getTranslations().forEach((t) => {
       const opt = translationSel.createEl("option", { text: t.toUpperCase(), value: t });
       if (t === this.plugin.settings.defaultTranslation) opt.selected = true;
     });
 
-    const row2 = container.createDiv("bible-row");
-    row2.createEl("label", { text: "Book", cls: "bible-label" });
-    const bookSel = row2.createEl("select", { cls: "bible-select" });
+    const bookWrap = row1.createDiv("bible-ctrl-group bible-ctrl-group--book");
+    bookWrap.createEl("label", { text: "Book", cls: "bible-label" });
+    const bookSel = bookWrap.createEl("select", { cls: "bible-select" });
     books.forEach((b) => bookSel.createEl("option", { text: b.book, value: String(b.id) }));
 
-    const row3 = container.createDiv("bible-row bible-row-inline");
-    row3.createEl("label", { text: "Ch.", cls: "bible-label" });
-    const chapterSel = row3.createEl("select", { cls: "bible-select-sm" });
-    row3.createEl("label", { text: "Verses", cls: "bible-label" });
-    const verseStartSel = row3.createEl("select", { cls: "bible-select-sm" });
-    row3.createEl("span", { text: "–", cls: "bible-dash" });
-    const verseEndSel = row3.createEl("select", { cls: "bible-select-sm" });
+    // ── Row 2: ‹ Ch. [sel] › Verses [sel]–[sel]  [Copy/Insert] ──────────────
+    const row2 = container.createDiv("bible-row-inline bible-controls-row");
+
+    const prevBtn = row2.createEl("button", { text: "‹", cls: "bible-chapter-nav" });
+    prevBtn.title = "Previous chapter";
+    row2.createEl("label", { text: "Ch.", cls: "bible-label" });
+    const chapterSel = row2.createEl("select", { cls: "bible-select-sm" });
+    const nextBtn = row2.createEl("button", { text: "›", cls: "bible-chapter-nav" });
+    nextBtn.title = "Next chapter";
+
+    row2.createEl("label", { text: "Vv.", cls: "bible-label" });
+    const verseStartSel = row2.createEl("select", { cls: "bible-select-sm" });
+    row2.createEl("span", { text: "–", cls: "bible-dash" });
+    const verseEndSel = row2.createEl("select", { cls: "bible-select-sm" });
+
+    // Copy/Insert button on the right of row 2
+    const insertBtnLabel = this.plugin.settings.insertMode === "clipboard" ? "Copy" : "Insert";
+    const quickInsertBtn = row2.createEl("button", { text: insertBtnLabel, cls: "bible-ref-insert-btn bible-ref-insert-btn--inline" });
+    quickInsertBtn.style.marginLeft = "auto";
 
     const results = container.createDiv("bible-results");
 
-    // ── Core lookup — called any time a selector changes ─────────────────────
+    // ── Core lookup ──────────────────────────────────────────────────────────
     const doLookup = () => {
       const translation = translationSel.value;
       const bookId = parseInt(bookSel.value);
@@ -1149,18 +1164,28 @@ class BibleStudyView extends ItemView {
       const verses = this.plugin.db.getPassage(translation, bookId, chapter, startVerse, endVerse);
       results.empty();
 
+      // Update nav button states
+      prevBtn.disabled = chapter <= 1;
+      nextBtn.disabled = chapter >= this.plugin.db.getChapterCount(bookId);
+
       if (!verses.length) {
         results.createEl("p", { text: "No verses found.", cls: "bible-empty" }); return;
       }
 
-      // Persist so Notes tab can filter to it and it survives tab switches
       this.currentPassage = { translation, bookId, chapter, startVerse, endVerse };
 
-      // ── Notes pre-split by scope ─────────────────────────────────────────────
+      // Wire quick insert now that we have verses in scope
+      quickInsertBtn.onclick = (e) => {
+        e.stopPropagation();
+        const text = this.buildInsertText(bookName, chapter, startVerse, endVerse, translation, verses);
+        this.plugin.deliverText(text);
+      };
+
+      // ── Notes pre-split by scope ───────────────────────────────────────────
       const { bookNotes, chapterNotes, verseNotes } =
         this.plugin.db.getPassageNotesByScope(bookId, chapter, startVerse, endVerse);
 
-      // ── Heading with clickable book / chapter spans ──────────────────────────
+      // ── Heading: Book  Ch:Vv–Vv ───────────────────────────────────────────
       const refEl = results.createDiv("bible-ref");
 
       const bookSpan = refEl.createEl("span", {
@@ -1196,30 +1221,16 @@ class BibleStudyView extends ItemView {
         };
       }
 
-      refEl.createEl("span", { text: "\u2002", cls: "bible-ref-gap" });
-      refEl.createEl("span", { text: `(${translation.toUpperCase()})`, cls: "bible-ref-translation" });
-
-      // Insert button — right side of the header row
-      const insertBtnLabel = this.plugin.settings.insertMode === "clipboard" ? "Copy" : "Insert";
-      const insertBtn = refEl.createEl("button", { text: insertBtnLabel, cls: "bible-ref-insert-btn" });
-      insertBtn.onclick = (e) => {
-        e.stopPropagation();
-        const text = this.buildInsertText(bookName, chapter, startVerse, endVerse, translation, verses);
-        this.plugin.deliverText(text);
-      };
-
-      // ── Verse block ──────────────────────────────────────────────────────────
+      // ── Verse block ────────────────────────────────────────────────────────
       const block = results.createDiv("bible-verse-block");
       verses.forEach((v) => {
         const vEl = block.createDiv("bible-verse");
         const vNotes = verseNotes.get(v.verse) ?? [];
-
         const numEl = vEl.createEl("sup", {
           text: String(v.verse),
           cls: vNotes.length ? "bible-verse-num bible-verse-num--noted" : "bible-verse-num",
         });
         vEl.createSpan({ text: " " + v.words });
-
         if (vNotes.length) {
           const tooltip = vEl.createDiv("bible-verse-tooltip");
           this.buildTooltipContent(tooltip, vNotes, books);
@@ -1256,6 +1267,21 @@ class BibleStudyView extends ItemView {
       populateVerses(andLookup);
     };
 
+    // ── Prev / Next chapter ──────────────────────────────────────────────────
+    prevBtn.onclick = () => {
+      const cur = parseInt(chapterSel.value);
+      if (cur <= 1) return;
+      chapterSel.value = String(cur - 1);
+      populateVerses(true);
+    };
+    nextBtn.onclick = () => {
+      const cur = parseInt(chapterSel.value);
+      const max = this.plugin.db.getChapterCount(parseInt(bookSel.value));
+      if (cur >= max) return;
+      chapterSel.value = String(cur + 1);
+      populateVerses(true);
+    };
+
     // ── Wire up change events ────────────────────────────────────────────────
     bookSel.onchange = () => populateChapters(true);
     chapterSel.onchange = () => populateVerses(true);
@@ -1275,7 +1301,6 @@ class BibleStudyView extends ItemView {
       verseEndSel.value = String(p.endVerse);
       doLookup();
     } else {
-      // First open — default to Genesis 1, whole chapter
       populateChapters(true);
     }
   }
