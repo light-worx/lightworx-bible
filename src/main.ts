@@ -1116,7 +1116,7 @@ class BibleStudyView extends ItemView {
     const row1 = container.createDiv("bible-row-inline bible-controls-row");
 
     const transWrap = row1.createDiv("bible-ctrl-group");
-    transWrap.createEl("label", { text: "Trans.", cls: "bible-label" });
+    transWrap.createEl("label", { text: "Version", cls: "bible-label" });
     const translationSel = transWrap.createEl("select", { cls: "bible-select bible-select--trans" });
     this.plugin.db.getTranslations().forEach((t) => {
       const opt = translationSel.createEl("option", { text: t.toUpperCase(), value: t });
@@ -1129,11 +1129,11 @@ class BibleStudyView extends ItemView {
     books.forEach((b) => bookSel.createEl("option", { text: b.book, value: String(b.id) }));
 
     const chWrap = row1.createDiv("bible-ctrl-group");
-    chWrap.createEl("label", { text: "Ch.", cls: "bible-label" });
+    chWrap.createEl("label", { text: "Chap", cls: "bible-label" });
     const chapterSel = chWrap.createEl("select", { cls: "bible-select-sm" });
 
     const vsWrap = row1.createDiv("bible-ctrl-group");
-    vsWrap.createEl("label", { text: "From", cls: "bible-label" });
+    vsWrap.createEl("label", { text: "Verse", cls: "bible-label" });
     const verseStartSel = vsWrap.createEl("select", { cls: "bible-select-sm" });
 
     const veWrap = row1.createDiv("bible-ctrl-group");
