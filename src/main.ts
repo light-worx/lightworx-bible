@@ -1112,7 +1112,7 @@ class BibleStudyView extends ItemView {
   private renderPassagePanel(container: HTMLElement): void {
     const books = this.plugin.db.getBookList();
 
-    // ── Row 1: Translation + Book side by side ───────────────────────────────
+    // ── Row 1: Trans. | Book | Ch. | From | To ───────────────────────────────
     const row1 = container.createDiv("bible-row-inline bible-controls-row");
 
     const transWrap = row1.createDiv("bible-ctrl-group");
@@ -1128,25 +1128,17 @@ class BibleStudyView extends ItemView {
     const bookSel = bookWrap.createEl("select", { cls: "bible-select" });
     books.forEach((b) => bookSel.createEl("option", { text: b.book, value: String(b.id) }));
 
-    // ── Row 2: [Ch.] [Vv.] – [Vv.]  [Copy/Insert] ───────────────────────────
-    const row2 = container.createDiv("bible-row-inline bible-controls-row");
-
-    const chWrap = row2.createDiv("bible-ctrl-group");
+    const chWrap = row1.createDiv("bible-ctrl-group");
     chWrap.createEl("label", { text: "Ch.", cls: "bible-label" });
     const chapterSel = chWrap.createEl("select", { cls: "bible-select-sm" });
 
-    const vsWrap = row2.createDiv("bible-ctrl-group");
+    const vsWrap = row1.createDiv("bible-ctrl-group");
     vsWrap.createEl("label", { text: "From", cls: "bible-label" });
     const verseStartSel = vsWrap.createEl("select", { cls: "bible-select-sm" });
 
-    const veWrap = row2.createDiv("bible-ctrl-group");
+    const veWrap = row1.createDiv("bible-ctrl-group");
     veWrap.createEl("label", { text: "To", cls: "bible-label" });
     const verseEndSel = veWrap.createEl("select", { cls: "bible-select-sm" });
-
-    // Copy/Insert button on the right of row 2
-    const insertBtnLabel = this.plugin.settings.insertMode === "clipboard" ? "Copy" : "Insert";
-    const quickInsertBtn = row2.createEl("button", { text: insertBtnLabel, cls: "bible-ref-insert-btn bible-ref-insert-btn--inline" });
-    quickInsertBtn.style.marginLeft = "auto";
 
     const results = container.createDiv("bible-results");
 
@@ -1170,18 +1162,7 @@ class BibleStudyView extends ItemView {
 
       this.currentPassage = { translation, bookId, chapter, startVerse, endVerse };
 
-      // Wire quick insert now that we have verses in scope
-      quickInsertBtn.onclick = (e) => {
-        e.stopPropagation();
-        const text = this.buildInsertText(bookName, chapter, startVerse, endVerse, translation, verses);
-        this.plugin.deliverText(text);
-      };
-
-      // ── Notes pre-split by scope ───────────────────────────────────────────
-      const { bookNotes, chapterNotes, verseNotes } =
-        this.plugin.db.getPassageNotesByScope(bookId, chapter, startVerse, endVerse);
-
-      // ── Heading: ‹ Book  Ch:Vv–Vv › ──────────────────────────────────────
+      // ── Nav row: ‹  BOOK Ch:Vv–Vv  › ─────────────────────────────────────
       const refEl = results.createDiv("bible-ref");
 
       const prevBtn = refEl.createEl("button", { text: "‹", cls: "bible-chapter-nav bible-chapter-nav--ref" });
@@ -1193,6 +1174,10 @@ class BibleStudyView extends ItemView {
         chapterSel.value = String(chapter - 1);
         populateVerses(true);
       };
+
+      // ── Notes pre-split by scope ───────────────────────────────────────────
+      const { bookNotes, chapterNotes, verseNotes } =
+        this.plugin.db.getPassageNotesByScope(bookId, chapter, startVerse, endVerse);
 
       const bookSpan = refEl.createEl("span", {
         text: bookName,
@@ -1227,7 +1212,6 @@ class BibleStudyView extends ItemView {
         };
       }
 
-      // Next chapter button — after the chapter:verse label
       const nextBtn = refEl.createEl("button", { text: "›", cls: "bible-chapter-nav bible-chapter-nav--ref" });
       nextBtn.title = "Next chapter";
       nextBtn.disabled = chapter >= this.plugin.db.getChapterCount(bookId);
@@ -1237,6 +1221,15 @@ class BibleStudyView extends ItemView {
         if (chapter >= max) return;
         chapterSel.value = String(chapter + 1);
         populateVerses(true);
+      };
+
+      // Copy/Insert button — sits to the right of the next button
+      const insertBtnLabel = this.plugin.settings.insertMode === "clipboard" ? "Copy" : "Insert";
+      const insertBtn = refEl.createEl("button", { text: insertBtnLabel, cls: "bible-ref-insert-btn bible-ref-insert-btn--nav" });
+      insertBtn.onclick = (e) => {
+        e.stopPropagation();
+        const text = this.buildInsertText(bookName, chapter, startVerse, endVerse, translation, verses);
+        this.plugin.deliverText(text);
       };
 
       // ── Verse block ────────────────────────────────────────────────────────

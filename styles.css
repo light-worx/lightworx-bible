@@ -840,6 +840,14 @@
   flex-shrink: 0;
 }
 
+/* Copy/Insert button sitting after › in the nav row */
+.bible-ref-insert-btn--nav {
+  flex-shrink: 0;
+  margin-left: 6px;
+  width: auto;
+  padding: 2px 10px;
+}
+
 /* ── Clickable search results ──────────────────────────── */
 
 .bible-search-result--clickable {
@@ -898,6 +906,7 @@
   border-radius: 4px;
   color: var(--text-muted);
   margin: 0 6px;
+  min-width: 28px;
 }
 
 .bible-chapter-nav--ref:hover:not(:disabled) {
