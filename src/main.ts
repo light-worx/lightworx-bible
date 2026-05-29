@@ -1040,11 +1040,12 @@ class BibleImportModal extends Modal {
           // Join remaining columns (text may contain commas)
           let rawText = cols.slice(3).join(",").replace(/^"|"$/g, "").trim();
 
-          // Strip non-Strong's XML tags (<pb/>, <milestone .../>, etc.)
-          rawText = rawText.replace(/<(?!S\b)[^>]+\/?>|<\/(?!S\b)[^>]+>/gi, " ").replace(/\s+/g, " ").trim();
+          // Strip non-Strong's XML/HTML tags (<pb/>, <milestone/>, etc.)
+          // Preserve <S>number> and <S>number</S> patterns
+          rawText = rawText.replace(/<(?!\/?S[\s>])(?:[^>]*)>/gi, " ").replace(/\s+/g, " ").trim();
 
-          // Detect Strong's tags <S>number</S>
-          const hasStrongs = /<S>\d+<\/S>/i.test(rawText);
+          // Detect Strong's tags — support both <S>7225</S> and <S>7225 (no closing tag)
+          const hasStrongs = /<S>\d+/i.test(rawText);
           let words = rawText;
           let tagged: string | undefined;
           let strongs_list: string | undefined;
@@ -1055,11 +1056,11 @@ class BibleImportModal extends Modal {
             const tokens: { text: string; strongs: string }[] = [];
             const strongsList: string[] = [];
 
-            // Split on <S>number</S> — each segment is "words<S>num</S>"
-            const parts = rawText.split(/(<S>\d+<\/S>)/i);
+            // Split on <S>number> or <S>number</S> — word text precedes each tag
+            const parts = rawText.split(/(<S>\d+(?:<\/S>)?)/i);
             let pending = "";
             for (const part of parts) {
-              const m = part.match(/^<S>(\d+)<\/S>$/i);
+              const m = part.match(/^<S>(\d+)/i);
               if (m) {
                 const num = `${prefix}${m[1]}`;
                 const wordText = pending.trim();
