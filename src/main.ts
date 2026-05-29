@@ -40,6 +40,14 @@ interface BibleNote {
   updated_at: string;
 }
 
+interface StrongsEntry {
+  number: string;   // e.g. "H7225" or "G26"
+  lemma: string;    // original language word
+  xlit: string;     // transliteration
+  pronounce: string;
+  description: string;
+}
+
 interface BiblePluginSettings {
   dbPath: string;
   defaultTranslation: string;
@@ -423,40 +431,43 @@ class BibleDatabase {
 
   importTranslation(
     slug: string,
-    rows: { book_id: number; chapter: number; verse: number; words: string }[],
+    rows: { book_id: number; chapter: number; verse: number; words: string; tagged?: string; strongs_list?: string }[],
     onProgress: (pct: number) => void
   ): void {
     if (!this.db) throw new Error("Database not loaded");
     const table = `${slug.toLowerCase()}_verses`;
+    const hasTagging = rows.some(r => r.tagged);
 
-    // Drop and recreate the table so re-importing replaces cleanly
     this.db.run(`DROP TABLE IF EXISTS ${table}`);
     this.db.run(`
       CREATE TABLE ${table} (
-        id      INTEGER PRIMARY KEY AUTOINCREMENT,
-        book_id INTEGER NOT NULL,
-        chapter INTEGER,
-        verse   INTEGER,
-        words   TEXT
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id      INTEGER NOT NULL,
+        chapter      INTEGER,
+        verse        INTEGER,
+        words        TEXT,
+        tagged       TEXT,
+        strongs_list TEXT
       )
     `);
     this.db.run(`CREATE INDEX IF NOT EXISTS idx_${slug}_book_ch ON ${table}(book_id, chapter)`);
+    if (hasTagging) {
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_${slug}_strongs ON ${table}(strongs_list)`);
+    }
 
-    // Insert in batches of 500
     const BATCH = 500;
     const total = rows.length;
     for (let i = 0; i < total; i += BATCH) {
       const batch = rows.slice(i, i + BATCH);
       const stmt = this.db.prepare(
-        `INSERT INTO ${table} (book_id, chapter, verse, words) VALUES (?, ?, ?, ?)`
+        `INSERT INTO ${table} (book_id, chapter, verse, words, tagged, strongs_list) VALUES (?, ?, ?, ?, ?, ?)`
       );
       for (const r of batch) {
-        stmt.run([r.book_id, r.chapter, r.verse, r.words]);
+        stmt.run([r.book_id, r.chapter, r.verse, r.words, r.tagged ?? null, r.strongs_list ?? null]);
       }
       stmt.free();
       onProgress(Math.round(((i + batch.length) / total) * 100));
     }
-
     this.saveToDisk();
   }
 
@@ -464,6 +475,86 @@ class BibleDatabase {
     if (!this.db) return;
     this.db.run(`DROP TABLE IF EXISTS ${slug.toLowerCase()}_verses`);
     this.saveToDisk();
+  }
+
+  // ── Strong's Numbers ─────────────────────────────────────────────────────────
+
+  hasStrongsTable(): boolean {
+    if (!this.db) return false;
+    const res = this.db.exec(`SELECT name FROM sqlite_master WHERE type='table' AND name='strongs'`);
+    return res.length > 0 && res[0].values.length > 0;
+  }
+
+  getStrongsEntry(number: string): StrongsEntry | null {
+    if (!this.db) return null;
+    const safe = number.replace(/'/g, "''");
+    const res = this.db.exec(
+      `SELECT number, lemma, xlit, pronounce, description FROM strongs WHERE number = '${safe}'`
+    );
+    if (!res.length || !res[0].values.length) return null;
+    const r = res[0].values[0];
+    return { number: r[0], lemma: r[1], xlit: r[2], pronounce: r[3], description: r[4] };
+  }
+
+  /** All verses in a translation that contain a given Strong's number */
+  getVersesByStrongs(number: string, translation: string, limit = 200): (BibleVerse & { book_name: string })[] {
+    if (!this.db) return [];
+    const table = `${translation.toLowerCase()}_verses`;
+    const safe = number.replace(/'/g, "''");
+    // strongs_list column holds space-separated numbers e.g. "H7225 H430 H1254"
+    const res = this.db.exec(
+      `SELECT v.book_id, v.chapter, v.verse, v.words, b.book as book_name
+       FROM ${table} v JOIN books b ON b.id = v.book_id
+       WHERE v.strongs_list LIKE '% ${safe} %'
+          OR v.strongs_list LIKE '${safe} %'
+          OR v.strongs_list LIKE '% ${safe}'
+          OR v.strongs_list = '${safe}'
+       ORDER BY v.book_id, v.chapter, v.verse LIMIT ${limit}`
+    );
+    if (!res.length) return [];
+    return res[0].values.map((r: any[]) => ({
+      book_id: r[0], chapter: r[1], verse: r[2], words: r[3], book_name: r[4],
+    }));
+  }
+
+  /** Parse tagged verse text into tokens [{text, strongs}] */
+  static parseTaggedText(tagged: string): { text: string; strongs: string | null }[] {
+    const tokens: { text: string; strongs: string | null }[] = [];
+    const parts = tagged.split(/\[([HG]\d+)\]/);
+    for (let i = 0; i < parts.length; i++) {
+      const text = parts[i].trim();
+      if (!text) continue;
+      if (i + 1 < parts.length && /^[HG]\d+$/.test(parts[i + 1])) {
+        tokens.push({ text, strongs: parts[i + 1] });
+        i++; // skip the strongs number
+      } else if (!/^[HG]\d+$/.test(text)) {
+        tokens.push({ text, strongs: null });
+      }
+    }
+    return tokens;
+  }
+
+  /** Get the tagged verse text for a single verse (returns null if no tagged data) */
+  getTaggedVerse(translation: string, bookId: number, chapter: number, verse: number): string | null {
+    if (!this.db) return null;
+    const table = `${translation.toLowerCase()}_verses`;
+    const res = this.db.exec(
+      `SELECT tagged FROM ${table} WHERE book_id = ${bookId} AND chapter = ${chapter} AND verse = ${verse}`
+    );
+    if (!res.length || !res[0].values.length) return null;
+    return res[0].values[0][0] as string | null;
+  }
+
+  /** Returns true if this translation has any tagged verses */
+  translationHasTagging(translation: string): boolean {
+    if (!this.db) return false;
+    const table = `${translation.toLowerCase()}_verses`;
+    try {
+      const res = this.db.exec(
+        `SELECT 1 FROM ${table} WHERE tagged IS NOT NULL LIMIT 1`
+      );
+      return res.length > 0 && res[0].values.length > 0;
+    } catch { return false; }
   }
 }
 
@@ -936,22 +1027,68 @@ class BibleImportModal extends Modal {
         const lines = text.split(/\r?\n/).filter((l) => l.trim());
         parsedRows = [];
         let skipped = 0;
+        let taggedCount = 0;
 
         for (const line of lines) {
-          // Simple CSV split — handles quoted fields with commas inside
           const cols = parseCsvLine(line);
           if (cols.length < 4) { skipped++; continue; }
           const book_id = parseInt(cols[0]);
           const chapter = parseInt(cols[1]);
           const verse   = parseInt(cols[2]);
-          const words   = cols.slice(3).join(",").replace(/^"|"$/g, "").trim();
           if (isNaN(book_id) || isNaN(chapter) || isNaN(verse)) { skipped++; continue; }
-          parsedRows.push({ book_id, chapter, verse, words });
+
+          // Join remaining columns (text may contain commas)
+          let rawText = cols.slice(3).join(",").replace(/^"|"$/g, "").trim();
+
+          // Strip non-Strong's XML tags (<pb/>, <milestone .../>, etc.)
+          rawText = rawText.replace(/<(?!S\b)[^>]+\/?>|<\/(?!S\b)[^>]+>/gi, " ").replace(/\s+/g, " ").trim();
+
+          // Detect Strong's tags <S>number</S>
+          const hasStrongs = /<S>\d+<\/S>/i.test(rawText);
+          let words = rawText;
+          let tagged: string | undefined;
+          let strongs_list: string | undefined;
+
+          if (hasStrongs) {
+            // Determine H or G prefix from book_id (1–39 = OT/Hebrew, 40+ = NT/Greek)
+            const prefix = book_id <= 39 ? "H" : "G";
+            const tokens: { text: string; strongs: string }[] = [];
+            const strongsList: string[] = [];
+
+            // Split on <S>number</S> — each segment is "words<S>num</S>"
+            const parts = rawText.split(/(<S>\d+<\/S>)/i);
+            let pending = "";
+            for (const part of parts) {
+              const m = part.match(/^<S>(\d+)<\/S>$/i);
+              if (m) {
+                const num = `${prefix}${m[1]}`;
+                const wordText = pending.trim();
+                if (wordText) tokens.push({ text: wordText, strongs: num });
+                strongsList.push(num);
+                pending = "";
+              } else {
+                pending += part;
+              }
+            }
+            // Any trailing text with no Strong's tag
+            if (pending.trim()) tokens.push({ text: pending.trim(), strongs: "" });
+
+            // Plain text = join all token texts
+            words = tokens.map(t => t.text).join(" ").replace(/\s+/g, " ").trim();
+
+            // Tagged format: "word text[Hnnnn]" joined by spaces — easy to parse at display time
+            tagged = tokens.map(t => t.strongs ? `${t.text}[${t.strongs}]` : t.text).join(" ");
+            strongs_list = strongsList.join(" ");
+            taggedCount++;
+          }
+
+          parsedRows.push({ book_id, chapter, verse, words, tagged, strongs_list });
         }
 
+        const tagMsg = taggedCount ? ` • ${taggedCount} verses with Strong's tags` : "";
         fileInfo.setText(
           parsedRows.length
-            ? `✓  ${parsedRows.length.toLocaleString()} verses parsed${skipped ? ` (${skipped} rows skipped)` : ""}.`
+            ? `✓  ${parsedRows.length.toLocaleString()} verses parsed${skipped ? ` (${skipped} rows skipped)` : ""}${tagMsg}.`
             : "⚠  No valid rows found. Check the file format."
         );
       };
@@ -1033,6 +1170,8 @@ class BibleStudyView extends ItemView {
   // Notes tab state
   private notesSearchQuery: string = "";
   private notesFilterToPassage: boolean = true;
+  // Strong's cross-reference search triggered from passage panel
+  pendingStrongsSearch: { number: string; translation: string } | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: BibleStudyPlugin) {
     super(leaf);
@@ -1116,7 +1255,7 @@ class BibleStudyView extends ItemView {
     const row1 = container.createDiv("bible-row-inline bible-controls-row");
 
     const transWrap = row1.createDiv("bible-ctrl-group");
-    transWrap.createEl("label", { text: "Version", cls: "bible-label" });
+    transWrap.createEl("label", { text: "Trans.", cls: "bible-label" });
     const translationSel = transWrap.createEl("select", { cls: "bible-select bible-select--trans" });
     this.plugin.db.getTranslations().forEach((t) => {
       const opt = translationSel.createEl("option", { text: t.toUpperCase(), value: t });
@@ -1129,11 +1268,11 @@ class BibleStudyView extends ItemView {
     books.forEach((b) => bookSel.createEl("option", { text: b.book, value: String(b.id) }));
 
     const chWrap = row1.createDiv("bible-ctrl-group");
-    chWrap.createEl("label", { text: "Chap", cls: "bible-label" });
+    chWrap.createEl("label", { text: "Ch.", cls: "bible-label" });
     const chapterSel = chWrap.createEl("select", { cls: "bible-select-sm" });
 
     const vsWrap = row1.createDiv("bible-ctrl-group");
-    vsWrap.createEl("label", { text: "Verse", cls: "bible-label" });
+    vsWrap.createEl("label", { text: "From", cls: "bible-label" });
     const verseStartSel = vsWrap.createEl("select", { cls: "bible-select-sm" });
 
     const veWrap = row1.createDiv("bible-ctrl-group");
@@ -1233,6 +1372,55 @@ class BibleStudyView extends ItemView {
       };
 
       // ── Verse block ────────────────────────────────────────────────────────
+      const hasTagging = this.plugin.db.translationHasTagging(translation);
+      const hasStrongs = hasTagging && this.plugin.db.hasStrongsTable();
+
+      // Strong's info panel — shown below verses when a word is clicked
+      const strongsPanel = results.createDiv("bible-strongs-panel");
+      strongsPanel.style.display = "none";
+      let activeWordEl: HTMLElement | null = null;
+
+      const showStrongs = (number: string, wordEl: HTMLElement) => {
+        // Deactivate previous
+        if (activeWordEl) activeWordEl.removeClass("bible-word--active");
+        activeWordEl = wordEl;
+        wordEl.addClass("bible-word--active");
+
+        strongsPanel.empty();
+        strongsPanel.style.display = "";
+        const entry = this.plugin.db.getStrongsEntry(number);
+
+        const panelHead = strongsPanel.createDiv("bible-strongs-head");
+        panelHead.createEl("span", { text: number, cls: "bible-strongs-number" });
+        if (entry) {
+          panelHead.createEl("span", { text: entry.lemma, cls: "bible-strongs-lemma" });
+          panelHead.createEl("span", { text: `${entry.xlit}  (${entry.pronounce})`, cls: "bible-strongs-xlit" });
+        }
+        const closeBtn = panelHead.createEl("button", { text: "✕", cls: "bible-strongs-close" });
+        closeBtn.onclick = () => {
+          strongsPanel.style.display = "none";
+          strongsPanel.empty();
+          if (activeWordEl) { activeWordEl.removeClass("bible-word--active"); activeWordEl = null; }
+        };
+
+        if (entry) {
+          strongsPanel.createEl("p", { text: entry.description, cls: "bible-strongs-desc" });
+        } else {
+          strongsPanel.createEl("p", { text: "No lexicon entry found.", cls: "bible-empty" });
+        }
+
+        const findBtn = strongsPanel.createEl("button", {
+          text: `Find all uses of ${number} in ${translation.toUpperCase()}`,
+          cls: "bible-btn bible-strongs-find-btn",
+        });
+        findBtn.onclick = () => {
+          // Store search and switch to Search tab
+          this.pendingStrongsSearch = { number, translation };
+          this.currentMode = "search";
+          this.render();
+        };
+      };
+
       const block = results.createDiv("bible-verse-block");
       verses.forEach((v) => {
         const vEl = block.createDiv("bible-verse");
@@ -1241,7 +1429,6 @@ class BibleStudyView extends ItemView {
           text: String(v.verse),
           cls: vNotes.length ? "bible-verse-num bible-verse-num--noted" : "bible-verse-num",
         });
-        vEl.createSpan({ text: " " + v.words });
         if (vNotes.length) {
           const tooltip = vEl.createDiv("bible-verse-tooltip");
           this.buildTooltipContent(tooltip, vNotes, books);
@@ -1251,6 +1438,29 @@ class BibleStudyView extends ItemView {
             e.stopPropagation();
             new BibleNoteModal(this.app, this.plugin, () => doLookup(), vNotes[0]).open();
           };
+        }
+
+        if (hasTagging) {
+          // Render each token as a clickable span if it has a Strong's number
+          const tagged = this.plugin.db.getTaggedVerse(translation, v.book_id, v.chapter, v.verse);
+          if (tagged) {
+            vEl.createEl("span", { text: " " }); // space after verse number
+            const tokens = BibleDatabase.parseTaggedText(tagged);
+            tokens.forEach((tok) => {
+              if (tok.strongs && hasStrongs) {
+                const span = vEl.createEl("span", { text: tok.text, cls: "bible-word bible-word--tagged" });
+                span.title = tok.strongs;
+                span.onclick = (e) => { e.stopPropagation(); showStrongs(tok.strongs!, span); };
+              } else {
+                vEl.createEl("span", { text: tok.text });
+              }
+              vEl.createEl("span", { text: " " });
+            });
+          } else {
+            vEl.createSpan({ text: " " + v.words });
+          }
+        } else {
+          vEl.createSpan({ text: " " + v.words });
         }
       });
     };
@@ -1379,68 +1589,112 @@ class BibleStudyView extends ItemView {
       if (t === this.plugin.settings.defaultTranslation) opt.selected = true;
     });
 
+    // If arriving from a Strong's word click, pre-select the translation
+    if (this.pendingStrongsSearch) {
+      translationSel.value = this.pendingStrongsSearch.translation;
+    }
+
     const row2 = container.createDiv("bible-row");
     const searchInput = row2.createEl("input", {
-      type: "text", placeholder: "Search for words or phrases…", cls: "bible-search-input",
+      type: "text", placeholder: "Search words, phrases, or Strong's (e.g. H7225)…", cls: "bible-search-input",
     });
 
     const searchBtn = container.createEl("button", { text: "Search", cls: "bible-btn" });
     const results = container.createDiv("bible-results");
 
-    const doSearch = () => {
+    const doSearch = (strongsOverride?: { number: string; translation: string }) => {
+      const translation = strongsOverride?.translation ?? translationSel.value;
       const query = searchInput.value.trim();
-      if (!query) return;
-      const hits = this.plugin.db.searchWords(translationSel.value, query);
+
+      // Detect Strong's number search: H or G followed by digits
+      const isStrongs = strongsOverride || /^[HG]\d+$/i.test(query);
+
+      if (!strongsOverride && !query) return;
       results.empty();
 
-      if (!hits.length) { results.createEl("p", { text: "No results found.", cls: "bible-empty" }); return; }
+      if (isStrongs) {
+        const number = strongsOverride ? strongsOverride.number : query.toUpperCase();
+        const entry = this.plugin.db.getStrongsEntry(number);
+        const hits = this.plugin.db.getVersesByStrongs(number, translation);
 
-      results.createEl("div", { text: `${hits.length} result${hits.length === 1 ? "" : "s"}`, cls: "bible-ref" });
+        // Show lexicon entry at top
+        if (entry) {
+          const entryEl = results.createDiv("bible-strongs-summary");
+          const headEl = entryEl.createDiv("bible-strongs-head");
+          headEl.createEl("span", { text: number, cls: "bible-strongs-number" });
+          headEl.createEl("span", { text: entry.lemma, cls: "bible-strongs-lemma" });
+          headEl.createEl("span", { text: `${entry.xlit}  (${entry.pronounce})`, cls: "bible-strongs-xlit" });
+          entryEl.createEl("p", { text: entry.description, cls: "bible-strongs-desc" });
+        }
 
-      hits.forEach((v) => {
-        const item = results.createDiv("bible-search-result bible-search-result--clickable");
-        item.title = "Click to open in Passage tab";
+        if (!hits.length) {
+          results.createEl("p", { text: `No verses found for ${number} in ${translation.toUpperCase()}.`, cls: "bible-empty" });
+          return;
+        }
+        results.createEl("div", {
+          text: `${hits.length} verse${hits.length === 1 ? "" : "s"} containing ${number} (${translation.toUpperCase()})`,
+          cls: "bible-ref",
+        });
+        hits.forEach((v) => this.renderSearchResultItem(results, v, translationSel));
 
-        const refRow = item.createEl("div", { cls: "bible-search-ref" });
-        refRow.createEl("span", { text: `${v.book_name} ${v.chapter}:${v.verse}` });
-
-        const btnGroup = refRow.createDiv("bible-search-ref-btns");
-
-        // Open in passage tab
-        const openBtn = btnGroup.createEl("button", { text: "Open", cls: "bible-btn-sm bible-btn-sm--open" });
-        openBtn.title = "Open in Passage tab";
-        openBtn.onclick = (e) => {
-          e.stopPropagation();
-          this.navigateToPassage(v.book_id, v.chapter, v.verse, translationSel.value);
-        };
-
-        const insertBtn = btnGroup.createEl("button", { text: "Insert", cls: "bible-btn-sm" });
-        insertBtn.onclick = (e) => {
-          e.stopPropagation();
-          const text = this.buildInsertText(v.book_name, v.chapter, v.verse, v.verse, translationSel.value,
-            [{ book_id: v.book_id, chapter: v.chapter, verse: v.verse, words: v.words }]);
-          this.plugin.deliverText(text);
-        };
-        const noteBtn = btnGroup.createEl("button", { text: "Note", cls: "bible-btn-sm" });
-        noteBtn.onclick = (e) => {
-          e.stopPropagation();
-          new BibleNoteModal(this.app, this.plugin, () => {}, null, {
-            book_id: v.book_id, bookName: v.book_name, chapter: v.chapter,
-            verse_start: v.verse, verse_end: v.verse,
-          }).open();
-        };
-
-        // Clicking anywhere on the card (not a button) also opens in passage tab
-        item.onclick = () => {
-          this.navigateToPassage(v.book_id, v.chapter, v.verse, translationSel.value);
-        };
-
-        item.createEl("div", { text: v.words, cls: "bible-search-text" });
-      });
+      } else {
+        const hits = this.plugin.db.searchWords(translation, query);
+        if (!hits.length) { results.createEl("p", { text: "No results found.", cls: "bible-empty" }); return; }
+        results.createEl("div", { text: `${hits.length} result${hits.length === 1 ? "" : "s"}`, cls: "bible-ref" });
+        hits.forEach((v) => this.renderSearchResultItem(results, v, translationSel));
+      }
     };
 
-    searchBtn.onclick = doSearch;
+    searchBtn.onclick = () => doSearch();
     searchInput.addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
+
+    // Auto-run if arriving from a Strong's word click
+    if (this.pendingStrongsSearch) {
+      const pending = this.pendingStrongsSearch;
+      this.pendingStrongsSearch = null;
+      searchInput.value = pending.number;
+      setTimeout(() => doSearch({ number: pending.number, translation: pending.translation }), 0);
+    }
+  }
+
+  private renderSearchResultItem(
+    results: HTMLElement,
+    v: BibleVerse & { book_name: string },
+    translationSel: HTMLSelectElement
+  ): void {
+    const item = results.createDiv("bible-search-result bible-search-result--clickable");
+    item.title = "Click to open in Passage tab";
+
+    const refRow = item.createEl("div", { cls: "bible-search-ref" });
+    refRow.createEl("span", { text: `${v.book_name} ${v.chapter}:${v.verse}` });
+
+    const btnGroup = refRow.createDiv("bible-search-ref-btns");
+
+    const openBtn = btnGroup.createEl("button", { text: "Open", cls: "bible-btn-sm bible-btn-sm--open" });
+    openBtn.title = "Open in Passage tab";
+    openBtn.onclick = (e) => {
+      e.stopPropagation();
+      this.navigateToPassage(v.book_id, v.chapter, v.verse, translationSel.value);
+    };
+
+    const insertBtn = btnGroup.createEl("button", { text: "Insert", cls: "bible-btn-sm" });
+    insertBtn.onclick = (e) => {
+      e.stopPropagation();
+      const text = this.buildInsertText(v.book_name, v.chapter, v.verse, v.verse, translationSel.value,
+        [{ book_id: v.book_id, chapter: v.chapter, verse: v.verse, words: v.words }]);
+      this.plugin.deliverText(text);
+    };
+    const noteBtn = btnGroup.createEl("button", { text: "Note", cls: "bible-btn-sm" });
+    noteBtn.onclick = (e) => {
+      e.stopPropagation();
+      new BibleNoteModal(this.app, this.plugin, () => {}, null, {
+        book_id: v.book_id, bookName: v.book_name, chapter: v.chapter,
+        verse_start: v.verse, verse_end: v.verse,
+      }).open();
+    };
+
+    item.onclick = () => this.navigateToPassage(v.book_id, v.chapter, v.verse, translationSel.value);
+    item.createEl("div", { text: v.words, cls: "bible-search-text" });
   }
 
   // ── Notes Panel ──────────────────────────────────────────────────────────────

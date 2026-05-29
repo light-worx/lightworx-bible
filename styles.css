@@ -914,3 +914,103 @@
   border-color: var(--interactive-accent);
   color: var(--text-on-accent);
 }
+
+/* ── Tagged words (Strong's) ───────────────────────────── */
+
+.bible-word--tagged {
+  cursor: pointer;
+  border-bottom: 1px dotted var(--text-accent);
+  transition: background 0.12s, color 0.12s;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.bible-word--tagged:hover {
+  background: rgba(74, 144, 217, 0.12);
+}
+
+.bible-word--active {
+  background: rgba(74, 144, 217, 0.2);
+  border-bottom-style: solid;
+}
+
+/* ── Strong's info panel (inline below verse block) ─────── */
+
+.bible-strongs-panel {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--background-secondary);
+  border-radius: 8px;
+  border-left: 3px solid #4a90d9;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bible-strongs-summary {
+  padding: 10px 12px;
+  background: var(--background-secondary);
+  border-radius: 8px;
+  border-left: 3px solid #4a90d9;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bible-strongs-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bible-strongs-number {
+  font-size: 11px;
+  font-weight: 800;
+  color: #4a90d9;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.bible-strongs-lemma {
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--text-normal);
+  line-height: 1.2;
+}
+
+.bible-strongs-xlit {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  flex: 1;
+}
+
+.bible-strongs-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.bible-strongs-close:hover { color: var(--text-normal); }
+
+.bible-strongs-desc {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-normal);
+  margin: 0;
+}
+
+.bible-strongs-find-btn {
+  margin-top: 2px;
+  font-size: 12px;
+  padding: 5px 10px;
+}
