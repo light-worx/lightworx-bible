@@ -481,19 +481,26 @@ class BibleDatabase {
 
   hasStrongsTable(): boolean {
     if (!this.db) return false;
-    const res = this.db.exec(`SELECT name FROM sqlite_master WHERE type='table' AND name='strongs'`);
-    return res.length > 0 && res[0].values.length > 0;
+    try {
+      const res = this.db.exec(`SELECT name FROM sqlite_master WHERE type='table' AND name='strongs'`);
+      return res.length > 0 && res[0].values.length > 0;
+    } catch { return false; }
   }
 
   getStrongsEntry(number: string): StrongsEntry | null {
     if (!this.db) return null;
-    const safe = number.replace(/'/g, "''");
-    const res = this.db.exec(
-      `SELECT number, lemma, xlit, pronounce, description FROM strongs WHERE number = '${safe}'`
-    );
-    if (!res.length || !res[0].values.length) return null;
-    const r = res[0].values[0];
-    return { number: r[0], lemma: r[1], xlit: r[2], pronounce: r[3], description: r[4] };
+    try {
+      const safe = number.replace(/'/g, "''");
+      const res = this.db.exec(
+        `SELECT number, lemma, xlit, pronounce, description FROM strongs WHERE number = '${safe}'`
+      );
+      if (!res.length || !res[0].values.length) return null;
+      const r = res[0].values[0];
+      return { number: r[0], lemma: r[1], xlit: r[2], pronounce: r[3], description: r[4] };
+    } catch (e: any) {
+      // Likely wrong column names — surface a helpful error
+      throw new Error(`Strongs lookup failed: ${e?.message ?? e}. Check that your strongs table has columns: number, lemma, xlit, pronounce, description`);
+    }
   }
 
   /** All verses in a translation that contain a given Strong's number */
@@ -1376,50 +1383,49 @@ class BibleStudyView extends ItemView {
       const hasTagging = this.plugin.db.translationHasTagging(translation);
       const hasStrongs = hasTagging && this.plugin.db.hasStrongsTable();
 
-      // Strong's info panel — shown below verses when a word is clicked
-      const strongsPanel = results.createDiv("bible-strongs-panel");
+      // Create panel element for closure capture, but append it AFTER the verse block
+      const strongsPanel = createEl("div", { cls: "bible-strongs-panel" });
       strongsPanel.style.display = "none";
       let activeWordEl: HTMLElement | null = null;
 
       const showStrongs = (number: string, wordEl: HTMLElement) => {
-        // Deactivate previous
         if (activeWordEl) activeWordEl.removeClass("bible-word--active");
         activeWordEl = wordEl;
         wordEl.addClass("bible-word--active");
-
         strongsPanel.empty();
         strongsPanel.style.display = "";
-        const entry = this.plugin.db.getStrongsEntry(number);
 
-        const panelHead = strongsPanel.createDiv("bible-strongs-head");
-        panelHead.createEl("span", { text: number, cls: "bible-strongs-number" });
-        if (entry) {
-          panelHead.createEl("span", { text: entry.lemma, cls: "bible-strongs-lemma" });
-          panelHead.createEl("span", { text: `${entry.xlit}  (${entry.pronounce})`, cls: "bible-strongs-xlit" });
+        try {
+          const entry = this.plugin.db.getStrongsEntry(number);
+          const panelHead = strongsPanel.createDiv("bible-strongs-head");
+          panelHead.createEl("span", { text: number, cls: "bible-strongs-number" });
+          if (entry) {
+            panelHead.createEl("span", { text: entry.lemma, cls: "bible-strongs-lemma" });
+            panelHead.createEl("span", { text: `${entry.xlit}  (${entry.pronounce})`, cls: "bible-strongs-xlit" });
+          }
+          const closeBtn = panelHead.createEl("button", { text: "✕", cls: "bible-strongs-close" });
+          closeBtn.onclick = () => {
+            strongsPanel.style.display = "none";
+            strongsPanel.empty();
+            if (activeWordEl) { activeWordEl.removeClass("bible-word--active"); activeWordEl = null; }
+          };
+          if (entry) {
+            strongsPanel.createEl("p", { text: entry.description, cls: "bible-strongs-desc" });
+          } else {
+            strongsPanel.createEl("p", { text: `No entry found for ${number}.`, cls: "bible-empty" });
+          }
+          const findBtn = strongsPanel.createEl("button", {
+            text: `Find all uses of ${number} in ${translation.toUpperCase()}`,
+            cls: "bible-btn bible-strongs-find-btn",
+          });
+          findBtn.onclick = () => {
+            this.pendingStrongsSearch = { number, translation };
+            this.currentMode = "search";
+            this.render();
+          };
+        } catch (e: any) {
+          strongsPanel.createEl("p", { text: `⚠ ${e?.message ?? e}`, cls: "bible-notice" });
         }
-        const closeBtn = panelHead.createEl("button", { text: "✕", cls: "bible-strongs-close" });
-        closeBtn.onclick = () => {
-          strongsPanel.style.display = "none";
-          strongsPanel.empty();
-          if (activeWordEl) { activeWordEl.removeClass("bible-word--active"); activeWordEl = null; }
-        };
-
-        if (entry) {
-          strongsPanel.createEl("p", { text: entry.description, cls: "bible-strongs-desc" });
-        } else {
-          strongsPanel.createEl("p", { text: "No lexicon entry found.", cls: "bible-empty" });
-        }
-
-        const findBtn = strongsPanel.createEl("button", {
-          text: `Find all uses of ${number} in ${translation.toUpperCase()}`,
-          cls: "bible-btn bible-strongs-find-btn",
-        });
-        findBtn.onclick = () => {
-          // Store search and switch to Search tab
-          this.pendingStrongsSearch = { number, translation };
-          this.currentMode = "search";
-          this.render();
-        };
       };
 
       const block = results.createDiv("bible-verse-block");
@@ -1442,10 +1448,9 @@ class BibleStudyView extends ItemView {
         }
 
         if (hasTagging) {
-          // Render each token as a clickable span if it has a Strong's number
           const tagged = this.plugin.db.getTaggedVerse(translation, v.book_id, v.chapter, v.verse);
           if (tagged) {
-            vEl.createEl("span", { text: " " }); // space after verse number
+            vEl.createEl("span", { text: " " });
             const tokens = BibleDatabase.parseTaggedText(tagged);
             tokens.forEach((tok) => {
               if (tok.strongs && hasStrongs) {
@@ -1464,6 +1469,9 @@ class BibleStudyView extends ItemView {
           vEl.createSpan({ text: " " + v.words });
         }
       });
+
+      // Append strongs panel AFTER verse block so it shows below the text
+      results.appendChild(strongsPanel);
     };
 
     // ── Populate helpers ─────────────────────────────────────────────────────
