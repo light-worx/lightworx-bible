@@ -1383,21 +1383,23 @@ class BibleStudyView extends ItemView {
       const hasTagging = this.plugin.db.translationHasTagging(translation);
       const hasStrongs = hasTagging && this.plugin.db.hasStrongsTable();
 
-      // Create panel element for closure capture, but append it AFTER the verse block
-      const strongsPanel = createEl("div", { cls: "bible-strongs-panel" });
-      strongsPanel.style.display = "none";
-      let activeWordEl: HTMLElement | null = null;
+      // Use a ref so showStrongs can reference the panel even though it's
+      // created AFTER the verse block (to get correct DOM ordering)
+      const ref: { panel: HTMLElement | null; activeWord: HTMLElement | null } = {
+        panel: null, activeWord: null,
+      };
 
       const showStrongs = (number: string, wordEl: HTMLElement) => {
-        if (activeWordEl) activeWordEl.removeClass("bible-word--active");
-        activeWordEl = wordEl;
+        if (!ref.panel) return;
+        if (ref.activeWord) ref.activeWord.removeClass("bible-word--active");
+        ref.activeWord = wordEl;
         wordEl.addClass("bible-word--active");
-        strongsPanel.empty();
-        strongsPanel.style.display = "";
+        ref.panel.empty();
+        ref.panel.style.display = "";
 
         try {
           const entry = this.plugin.db.getStrongsEntry(number);
-          const panelHead = strongsPanel.createDiv("bible-strongs-head");
+          const panelHead = ref.panel.createDiv("bible-strongs-head");
           panelHead.createEl("span", { text: number, cls: "bible-strongs-number" });
           if (entry) {
             panelHead.createEl("span", { text: entry.lemma, cls: "bible-strongs-lemma" });
@@ -1405,16 +1407,15 @@ class BibleStudyView extends ItemView {
           }
           const closeBtn = panelHead.createEl("button", { text: "✕", cls: "bible-strongs-close" });
           closeBtn.onclick = () => {
-            strongsPanel.style.display = "none";
-            strongsPanel.empty();
-            if (activeWordEl) { activeWordEl.removeClass("bible-word--active"); activeWordEl = null; }
+            if (ref.panel) { ref.panel.style.display = "none"; ref.panel.empty(); }
+            if (ref.activeWord) { ref.activeWord.removeClass("bible-word--active"); ref.activeWord = null; }
           };
           if (entry) {
-            strongsPanel.createEl("p", { text: entry.description, cls: "bible-strongs-desc" });
+            ref.panel.createEl("p", { text: entry.description, cls: "bible-strongs-desc" });
           } else {
-            strongsPanel.createEl("p", { text: `No entry found for ${number}.`, cls: "bible-empty" });
+            ref.panel.createEl("p", { text: `No entry found for ${number}.`, cls: "bible-empty" });
           }
-          const findBtn = strongsPanel.createEl("button", {
+          const findBtn = ref.panel.createEl("button", {
             text: `Find all uses of ${number} in ${translation.toUpperCase()}`,
             cls: "bible-btn bible-strongs-find-btn",
           });
@@ -1424,10 +1425,11 @@ class BibleStudyView extends ItemView {
             this.render();
           };
         } catch (e: any) {
-          strongsPanel.createEl("p", { text: `⚠ ${e?.message ?? e}`, cls: "bible-notice" });
+          ref.panel?.createEl("p", { text: `⚠ ${e?.message ?? e}`, cls: "bible-notice" });
         }
       };
 
+      // ── Verse block ────────────────────────────────────────────────────────
       const block = results.createDiv("bible-verse-block");
       verses.forEach((v) => {
         const vEl = block.createDiv("bible-verse");
@@ -1470,8 +1472,10 @@ class BibleStudyView extends ItemView {
         }
       });
 
-      // Append strongs panel AFTER verse block so it shows below the text
-      results.appendChild(strongsPanel);
+      // Create panel AFTER verse block so it appears below the text,
+      // then assign to ref so showStrongs can use it
+      ref.panel = results.createDiv("bible-strongs-panel");
+      ref.panel.style.display = "none";
     };
 
     // ── Populate helpers ─────────────────────────────────────────────────────
