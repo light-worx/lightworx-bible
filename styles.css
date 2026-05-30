@@ -1014,3 +1014,20 @@
   font-size: 12px;
   padding: 5px 10px;
 }
+
+/* ── Sticky passage controls ───────────────────────────── */
+
+.bible-sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--background-primary);
+  padding-bottom: 4px;
+  margin: -12px -12px 0;
+  padding: 12px 12px 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.bible-nav-container {
+  margin-top: 4px;
+}

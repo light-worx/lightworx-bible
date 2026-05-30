@@ -1280,8 +1280,11 @@ class BibleStudyView extends ItemView {
   private renderPassagePanel(container: HTMLElement): void {
     const books = this.plugin.db.getBookList();
 
+    // ── Sticky header: all controls + nav row ────────────────────────────────
+    const stickyHeader = container.createDiv("bible-sticky-header");
+
     // ── Row 1: Trans. | Book | Ch. | From | To ───────────────────────────────
-    const row1 = container.createDiv("bible-row-inline bible-controls-row");
+    const row1 = stickyHeader.createDiv("bible-row-inline bible-controls-row");
 
     const transWrap = row1.createDiv("bible-ctrl-group");
     transWrap.createEl("label", { text: "Trans.", cls: "bible-label" });
@@ -1308,6 +1311,10 @@ class BibleStudyView extends ItemView {
     veWrap.createEl("label", { text: "To", cls: "bible-label" });
     const verseEndSel = veWrap.createEl("select", { cls: "bible-select-sm" });
 
+    // ── Nav row container — filled/replaced by doLookup ──────────────────────
+    const navContainer = stickyHeader.createDiv("bible-nav-container");
+
+    // ── Scrollable verse content ─────────────────────────────────────────────
     const results = container.createDiv("bible-results");
 
     // ── Core lookup ──────────────────────────────────────────────────────────
@@ -1330,8 +1337,9 @@ class BibleStudyView extends ItemView {
 
       this.currentPassage = { translation, bookId, chapter, startVerse, endVerse };
 
-      // ── Nav row: ‹  BOOK Ch:Vv–Vv  › ─────────────────────────────────────
-      const refEl = results.createDiv("bible-ref");
+      // ── Nav row: ‹  BOOK Ch:Vv–Vv  › (inside sticky header) ──────────────
+      navContainer.empty();
+      const refEl = navContainer.createDiv("bible-ref");
 
       const prevBtn = refEl.createEl("button", { text: "‹", cls: "bible-chapter-nav bible-chapter-nav--ref" });
       prevBtn.title = "Previous chapter";
