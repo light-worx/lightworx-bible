@@ -1017,15 +1017,19 @@
 
 /* ── Sticky passage controls ───────────────────────────── */
 
+.bible-body:has(.bible-sticky-header) {
+  padding-top: 0;
+  gap: 0;
+}
+
 .bible-sticky-header {
   position: sticky;
   top: 0;
   z-index: 20;
   background: var(--background-primary);
-  padding-bottom: 4px;
-  margin: -12px -12px 0;
   padding: 12px 12px 6px;
   border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 8px;
 }
 
 .bible-nav-container {
