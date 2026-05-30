@@ -1458,7 +1458,11 @@ class BibleStudyView extends ItemView {
               if (tok.strongs && hasStrongs) {
                 const span = vEl.createEl("span", { text: tok.text, cls: "bible-word bible-word--tagged" });
                 span.title = tok.strongs;
-                span.onclick = (e) => { e.stopPropagation(); showStrongs(tok.strongs!, span); };
+                span.onclick = (e) => {
+                  e.stopPropagation();
+                  console.log("Bible plugin: word clicked", tok.strongs, "ref.panel=", ref.panel);
+                  showStrongs(tok.strongs!, span);
+                };
               } else {
                 vEl.createEl("span", { text: tok.text });
               }
@@ -1476,9 +1480,7 @@ class BibleStudyView extends ItemView {
       // then assign to ref so showStrongs can use it
       ref.panel = results.createDiv("bible-strongs-panel");
       ref.panel.style.display = "none";
-    };
-
-    // ── Populate helpers ─────────────────────────────────────────────────────
+    }; // end doLookup
     const populateVerses = (andLookup = true) => {
       const bookId = parseInt(bookSel.value);
       const chapter = parseInt(chapterSel.value);
