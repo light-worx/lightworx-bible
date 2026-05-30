@@ -508,20 +508,41 @@ class BibleDatabase {
     if (!this.db) return [];
     const table = `${translation.toLowerCase()}_verses`;
     const safe = number.replace(/'/g, "''");
-    // strongs_list column holds space-separated numbers e.g. "H7225 H430 H1254"
-    const res = this.db.exec(
-      `SELECT v.book_id, v.chapter, v.verse, v.words, b.book as book_name
-       FROM ${table} v JOIN books b ON b.id = v.book_id
-       WHERE v.strongs_list LIKE '% ${safe} %'
-          OR v.strongs_list LIKE '${safe} %'
-          OR v.strongs_list LIKE '% ${safe}'
-          OR v.strongs_list = '${safe}'
-       ORDER BY v.book_id, v.chapter, v.verse LIMIT ${limit}`
-    );
-    if (!res.length) return [];
-    return res[0].values.map((r: any[]) => ({
-      book_id: r[0], chapter: r[1], verse: r[2], words: r[3], book_name: r[4],
-    }));
+
+    // Try strongs_list column first (fast index-friendly search)
+    try {
+      const res = this.db.exec(
+        `SELECT v.book_id, v.chapter, v.verse, v.words, b.book as book_name
+         FROM ${table} v JOIN books b ON b.id = v.book_id
+         WHERE v.strongs_list LIKE '% ${safe} %'
+            OR v.strongs_list LIKE '${safe} %'
+            OR v.strongs_list LIKE '% ${safe}'
+            OR v.strongs_list = '${safe}'
+         ORDER BY v.book_id, v.chapter, v.verse LIMIT ${limit}`
+      );
+      if (res.length) {
+        return res[0].values.map((r: any[]) => ({
+          book_id: r[0], chapter: r[1], verse: r[2], words: r[3], book_name: r[4],
+        }));
+      }
+      return [];
+    } catch {
+      // strongs_list column missing — fall back to searching the tagged column
+    }
+
+    // Fallback: search tagged column for [H1234] or [G1234] pattern
+    try {
+      const res = this.db.exec(
+        `SELECT v.book_id, v.chapter, v.verse, v.words, b.book as book_name
+         FROM ${table} v JOIN books b ON b.id = v.book_id
+         WHERE v.tagged LIKE '%[${safe}]%'
+         ORDER BY v.book_id, v.chapter, v.verse LIMIT ${limit}`
+      );
+      if (!res.length) return [];
+      return res[0].values.map((r: any[]) => ({
+        book_id: r[0], chapter: r[1], verse: r[2], words: r[3], book_name: r[4],
+      }));
+    } catch { return []; }
   }
 
   /** Parse tagged verse text into tokens [{text, strongs}] */
@@ -1396,6 +1417,8 @@ class BibleStudyView extends ItemView {
         wordEl.addClass("bible-word--active");
         ref.panel.empty();
         ref.panel.style.display = "";
+        // Scroll the panel into view smoothly so the user sees it regardless of scroll position
+        setTimeout(() => ref.panel?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
 
         try {
           const entry = this.plugin.db.getStrongsEntry(number);
@@ -1458,11 +1481,7 @@ class BibleStudyView extends ItemView {
               if (tok.strongs && hasStrongs) {
                 const span = vEl.createEl("span", { text: tok.text, cls: "bible-word bible-word--tagged" });
                 span.title = tok.strongs;
-                span.onclick = (e) => {
-                  e.stopPropagation();
-                  console.log("Bible plugin: word clicked", tok.strongs, "ref.panel=", ref.panel);
-                  showStrongs(tok.strongs!, span);
-                };
+                span.onclick = (e) => { e.stopPropagation(); showStrongs(tok.strongs!, span); };
               } else {
                 vEl.createEl("span", { text: tok.text });
               }
