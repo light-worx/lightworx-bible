@@ -1985,6 +1985,19 @@ export default class BibleStudyPlugin extends Plugin {
       },
     });
 
+    // ── Code block processor: ```bible ────────────────────────────────────────
+    // Usage 1: direct reference
+    //   ```bible
+    //   John 1:1-10 NIV
+    //   ```
+    // Usage 2: read from frontmatter property
+    //   ```bible
+    //   frontmatter:reading
+    //   ```
+    this.registerMarkdownCodeBlockProcessor("bible", (source, el, ctx) => {
+      this.renderBibleBlock(source.trim(), el, ctx);
+    });
+
     this.addSettingTab(new BibleSettingTab(this.app, this));
   }
 
@@ -2058,6 +2071,61 @@ export default class BibleStudyPlugin extends Plugin {
     }
     editor.setValue(newContent);
     new Notice(`Expanded ${count} Bible reference${count === 1 ? "" : "s"}.`);
+  }
+
+  renderBibleBlock(source: string, el: HTMLElement, ctx: any): void {
+    el.addClass("bible-block");
+
+    const renderError = (msg: string) => {
+      el.createEl("p", { text: `⚠ Bible: ${msg}`, cls: "bible-block-error" });
+    };
+
+    if (!this.db.isLoaded()) {
+      renderError("Database not loaded. Check plugin settings.");
+      return;
+    }
+
+    // Resolve the reference string — either direct or from frontmatter
+    let refStr = source;
+    const fmMatch = source.match(/^frontmatter:(.+)$/i);
+    if (fmMatch) {
+      const key = fmMatch[1].trim();
+      const file = this.app.workspace.getActiveFile()
+        ?? this.app.vault.getFiles().find(f => f.path === ctx.sourcePath);
+      if (!file) { renderError(`Could not resolve frontmatter key "${key}".`); return; }
+      const meta = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      const val = meta?.[key];
+      if (!val) { renderError(`Frontmatter key "${key}" not found or empty.`); return; }
+      refStr = String(val).trim();
+    }
+
+    const parsed = parseReference(refStr, this.db.getBookList(), this.settings.defaultTranslation, this.db.getTranslations());
+    if (!parsed) {
+      renderError(`Could not parse reference "${refStr}". Try e.g. "John 1:1-10 NIV".`);
+      return;
+    }
+
+    const verses = this.db.getPassage(
+      parsed.translation, parsed.book.id, parsed.chapter, parsed.startVerse, parsed.endVerse
+    );
+    if (!verses.length) {
+      renderError(`No verses found for ${refStr}.`);
+      return;
+    }
+
+    // ── Render ────────────────────────────────────────────────────────────────
+    const refPart = parsed.endVerse > parsed.startVerse
+      ? `${parsed.startVerse}–${parsed.endVerse}` : `${parsed.startVerse}`;
+    const heading = `${parsed.book.book} ${parsed.chapter}:${refPart} (${parsed.translation.toUpperCase()})`;
+
+    el.createEl("p", { text: heading, cls: "bible-block-ref" });
+
+    const block = el.createDiv("bible-block-body");
+    verses.forEach((v) => {
+      const vEl = block.createDiv("bible-block-verse");
+      vEl.createEl("sup", { text: String(v.verse), cls: "bible-block-verse-num" });
+      vEl.createSpan({ text: " " + v.words });
+    });
   }
 
   deliverText(text: string): void {
