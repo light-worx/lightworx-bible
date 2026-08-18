@@ -78,10 +78,14 @@ class BibleDatabase {
     const wasmBinary: Uint8Array = require("./sql-wasm.wasm");
     const SQL = await initSqlJs({ wasmBinary });
 
-    // readBinary works on both desktop and mobile via Obsidian's adapter
     const fileBuffer = await adapter.readBinary(dbVaultPath);
     this.db = new SQL.Database(new Uint8Array(fileBuffer));
-    this.ensureNotesSchema();
+
+    // Only write back if schema migration was needed — avoids corrupting
+    // the file on mobile when nothing actually changed
+    const migrated = this.ensureNotesSchema();
+    if (migrated) await this.saveToDisk();
+
     this.books = this.fetchBooks();
   }
 
@@ -89,7 +93,13 @@ class BibleDatabase {
 
   // ── Schema ──────────────────────────────────────────────────────────────────
 
-  private ensureNotesSchema(): void {
+  /** Returns true if any migration was applied (so caller knows to save) */
+  private ensureNotesSchema(): boolean {
+    const existing = this.db.exec(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='notes'`
+    );
+    if (existing.length && existing[0].values.length) return false; // already exists
+
     this.db.run(`
       CREATE TABLE IF NOT EXISTS notes (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,22 +113,25 @@ class BibleDatabase {
         updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
-    // Don't await — schema save can be fire-and-forget on first run
-    this.saveToDisk();
+    return true;
   }
 
   // ── Persistence ─────────────────────────────────────────────────────────────
 
-  saveToDisk(): void {
+  async saveToDisk(): Promise<void> {
     if (!this.db || !this.adapter || !this.dbVaultPath) return;
     try {
-      const data: Uint8Array = this.db.export();
-      // writeBinary is available on both desktop and mobile adapters
-      this.adapter.writeBinary(this.dbVaultPath, data.buffer).catch((e: any) => {
-        console.error("Bible plugin: failed to save DB", e);
-      });
+      const exported: Uint8Array = this.db.export();
+      // Copy into a fresh ArrayBuffer — on mobile the Uint8Array's underlying
+      // buffer may be a shared WASM memory buffer with a non-zero byteOffset,
+      // which confuses Obsidian's mobile adapter and produces a malformed file.
+      const clean = exported.buffer.slice(
+        exported.byteOffset,
+        exported.byteOffset + exported.byteLength
+      );
+      await this.adapter.writeBinary(this.dbVaultPath, clean);
     } catch (e: any) {
-      console.error("Bible plugin: failed to export DB", e);
+      console.error("Bible plugin: failed to save DB", e);
     }
   }
 
@@ -177,7 +190,7 @@ class BibleDatabase {
 
   // ── Notes CRUD ───────────────────────────────────────────────────────────────
 
-  createNote(note: Omit<BibleNote, "id" | "created_at" | "updated_at">): number {
+  async createNote(note: Omit<BibleNote, "id" | "created_at" | "updated_at">): number {
     if (!this.db) return -1;
     const { body, book_id, chapter, verse_start, verse_end, tags } = note;
     const safe = (s: string | null) => s === null ? "NULL" : `'${s.replace(/'/g, "''")}'`;
@@ -188,24 +201,24 @@ class BibleDatabase {
     );
     const res = this.db.exec("SELECT last_insert_rowid()");
     const id = res[0].values[0][0] as number;
-    this.saveToDisk();
+    await this.saveToDisk();
     return id;
   }
 
-  updateNote(id: number, body: string, tags: string | null): void {
+  async updateNote(id: number, body: string, tags: string | null): void {
     if (!this.db) return;
     const safeBody = body.replace(/'/g, "''");
     const safeTags = tags === null ? "NULL" : `'${tags.replace(/'/g, "''")}'`;
     this.db.run(
       `UPDATE notes SET body = '${safeBody}', tags = ${safeTags}, updated_at = datetime('now') WHERE id = ${id}`
     );
-    this.saveToDisk();
+    await this.saveToDisk();
   }
 
-  deleteNote(id: number): void {
+  async deleteNote(id: number): void {
     if (!this.db) return;
     this.db.run(`DELETE FROM notes WHERE id = ${id}`);
-    this.saveToDisk();
+    await this.saveToDisk();
   }
 
   getNoteById(id: number): BibleNote | null {
@@ -429,7 +442,7 @@ class BibleDatabase {
     return this.getInstalledTranslations();
   }
 
-  importTranslation(
+  async importTranslation(
     slug: string,
     rows: { book_id: number; chapter: number; verse: number; words: string; tagged?: string; strongs_list?: string }[],
     onProgress: (pct: number) => void
@@ -468,13 +481,13 @@ class BibleDatabase {
       stmt.free();
       onProgress(Math.round(((i + batch.length) / total) * 100));
     }
-    this.saveToDisk();
+    await this.saveToDisk();
   }
 
-  deleteTranslation(slug: string): void {
+  async deleteTranslation(slug: string): void {
     if (!this.db) return;
     this.db.run(`DROP TABLE IF EXISTS ${slug.toLowerCase()}_verses`);
-    this.saveToDisk();
+    await this.saveToDisk();
   }
 
   // ── Strong's Numbers ─────────────────────────────────────────────────────────
