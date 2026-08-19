@@ -79,13 +79,24 @@ class BibleDatabase {
     const SQL = await initSqlJs({ wasmBinary });
 
     const fileBuffer = await adapter.readBinary(dbVaultPath);
-    this.db = new SQL.Database(new Uint8Array(fileBuffer));
+    const bytes = new Uint8Array(fileBuffer);
 
-    // Only write back if schema migration was needed — avoids corrupting
-    // the file on mobile when nothing actually changed
+    // Validate SQLite magic bytes before handing to sql.js
+    // A valid SQLite file always starts with "SQLite format 3\0"
+    const MAGIC = "SQLite format 3\0";
+    const magic = String.fromCharCode(...bytes.slice(0, 16));
+    if (magic !== MAGIC) {
+      const hex = Array.from(bytes.slice(0, 16)).map(b => b.toString(16).padStart(2, "0")).join(" ");
+      throw new Error(
+        `Database file is not a valid SQLite file (bad magic bytes: ${hex}). ` +
+        `The file (${bytes.length} bytes) may be corrupted or synced incompletely. ` +
+        `Please replace bible.db with a fresh copy from your desktop.`
+      );
+    }
+
+    this.db = new SQL.Database(bytes);
     const migrated = this.ensureNotesSchema();
     if (migrated) await this.saveToDisk();
-
     this.books = this.fetchBooks();
   }
 
