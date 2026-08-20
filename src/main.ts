@@ -2146,9 +2146,9 @@ export default class BibleStudyPlugin extends Plugin {
 
     const block = el.createDiv("bible-block-body");
     verses.forEach((v) => {
-      const vEl = block.createDiv("bible-block-verse");
+      const vEl = block.createEl("span", { cls: "bible-block-verse" });
       vEl.createEl("sup", { text: String(v.verse), cls: "bible-block-verse-num" });
-      vEl.createSpan({ text: " " + v.words });
+      vEl.createSpan({ text: v.words + " " });
     });
   }
 

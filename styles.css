@@ -1036,8 +1036,8 @@
 
 .bible-block {
   border-left: 3px solid var(--interactive-accent);
-  padding: 10px 14px;
-  margin: 8px 0;
+  padding: 6px 14px;
+  margin: 4px 0;
   background: var(--background-secondary);
   border-radius: 0 6px 6px 0;
 }
@@ -1048,16 +1048,16 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-accent);
-  margin: 0 0 8px;
+  margin: 0 0 4px;
+  display: block;
 }
 
 .bible-block-body {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+  display: inline;
 }
 
 .bible-block-verse {
+  display: inline;
   font-size: 14px;
   line-height: 1.7;
   color: var(--text-normal);
