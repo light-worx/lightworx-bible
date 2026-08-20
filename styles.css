@@ -1037,9 +1037,15 @@
 .bible-block {
   border-left: 3px solid var(--interactive-accent);
   padding: 6px 14px;
-  margin: 4px 0;
+  margin: 4px 0 !important;
   background: var(--background-secondary);
   border-radius: 0 6px 6px 0;
+}
+
+/* Override Obsidian's default p margins inside the block */
+.bible-block p {
+  margin: 0 !important;
+  padding: 0;
 }
 
 .bible-block-ref {
@@ -1048,8 +1054,10 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-accent);
-  margin: 0 0 4px;
   display: block;
+  margin: 0 !important;
+  padding: 0;
+  line-height: 1.4;
 }
 
 .bible-block-body {

@@ -2142,7 +2142,7 @@ export default class BibleStudyPlugin extends Plugin {
       ? `${parsed.startVerse}–${parsed.endVerse}` : `${parsed.startVerse}`;
     const heading = `${parsed.book.book} ${parsed.chapter}:${refPart} (${parsed.translation.toUpperCase()})`;
 
-    el.createEl("p", { text: heading, cls: "bible-block-ref" });
+    el.createEl("div", { text: heading, cls: "bible-block-ref" });
 
     const block = el.createDiv("bible-block-body");
     verses.forEach((v) => {
