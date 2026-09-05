@@ -1084,3 +1084,85 @@
   font-size: 13px;
   margin: 0;
 }
+
+/* ── Settings help section ─────────────────────────────── */
+
+.bible-help {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.bible-help-summary {
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-normal);
+  background: var(--background-secondary);
+  list-style: none;
+  user-select: none;
+}
+
+.bible-help-summary::-webkit-details-marker { display: none; }
+
+.bible-help-summary:hover {
+  background: var(--background-modifier-hover);
+}
+
+.bible-help[open] .bible-help-summary {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.bible-help-body {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bible-help-heading {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-accent);
+  margin: 12px 0 2px;
+}
+
+.bible-help-heading:first-child {
+  margin-top: 0;
+}
+
+.bible-help-p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-normal);
+  margin: 0;
+}
+
+.bible-help-code {
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  background: var(--background-modifier-form-field);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--text-accent);
+}
+
+.bible-help-pre {
+  margin: 4px 0;
+  padding: 8px 12px;
+  background: var(--background-modifier-form-field);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.bible-help-pre code {
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-normal);
+  white-space: pre;
+}

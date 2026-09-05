@@ -1894,6 +1894,57 @@ class BibleSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "Bible Settings" });
 
+    // ── Collapsible help section ───────────────────────────────────────────────
+    const details = containerEl.createEl("details", { cls: "bible-help" });
+    const summary = details.createEl("summary", { cls: "bible-help-summary" });
+    summary.createEl("span", { text: "📖  How to use — Bible syntax in notes" });
+
+    const help = details.createDiv("bible-help-body");
+
+    const section = (title: string) =>
+      help.createEl("h4", { text: title, cls: "bible-help-heading" });
+
+    const code = (text: string) =>
+      help.createEl("code", { text, cls: "bible-help-code" });
+
+    const p = (text: string) =>
+      help.createEl("p", { text, cls: "bible-help-p" });
+
+    section("Bible code block — direct reference");
+    p("Paste a code block with the language set to bible anywhere in a note. In Reading mode the passage renders inline from the database:");
+    const eg1 = help.createEl("pre", { cls: "bible-help-pre" });
+    eg1.createEl("code", { text: "```bible\nJohn 3:16 NIV\n```" });
+    p("The translation is optional — if omitted your default translation is used. Ranges work too: Romans 8:1-4 GNT");
+
+    section("Frontmatter-driven block — sermon template");
+    p("Add a reading key to your note's frontmatter, then reference it in a code block:");
+    const eg2 = help.createEl("pre", { cls: "bible-help-pre" });
+    eg2.createEl("code", { text: "---\nreading: John 1:1-10 NIV\n---\n\n# {{reading}}\n\n```bible\nfrontmatter:reading\n```" });
+    p("The block reads the frontmatter value automatically. Change the reading property and the rendered text updates.");
+
+    section("Inline expansion — {{references}}");
+    p("Type a reference anywhere in a note using double curly braces:");
+    code("{{Romans 8:28 NIV}}");
+    p("Then run the command Bible: Expand {{Bible references}} in note from the command palette (or assign it a hotkey). Every {{...}} tag in the note is replaced with the passage text at the cursor.");
+
+    section("Quick insert modal");
+    p("Assign a hotkey to Bible: Quick insert Bible passage. A modal opens where you can type any reference and see a live preview before inserting or copying to clipboard.");
+
+    section("Sidebar");
+    p("Click the open-book icon in the left ribbon (or run Bible: Open Bible Sidebar) to open the passage browser. Use the Passage tab to read and navigate, the Search tab to find words or Strong's numbers (e.g. G2222), and the Notes tab to keep study notes attached to specific verses.");
+
+    section("Strong's numbers");
+    p("If your translation was imported with Strong's tagging (e.g. NASB), every word in the passage panel is underlined. Click any word to see the Hebrew or Greek lexicon entry. Use the Find all uses button to search across the whole translation for that word.");
+
+    section("CSV import format");
+    p("Settings → Bible Translations → Open Import Wizard. CSV columns:");
+    const eg3 = help.createEl("pre", { cls: "bible-help-pre" });
+    eg3.createEl("code", { text: "book_id, chapter, verse, text\n1,1,1,In the beginning<S>7225 God<S>430 created..." });
+    p("book_id follows the standard Bible book order (Genesis = 1, … Revelation = 66). Strong's tags <S>number are optional — include them for word-level lookup. The H/G prefix is added automatically (books 1–39 = Hebrew, 40–66 = Greek).");
+
+    containerEl.createEl("hr");
+    // ── Settings ──────────────────────────────────────────────────────────────
+
     const defaultPath = normalizePath(".obsidian/plugins/lightworx-bible/data/bible.db");
     containerEl.createEl("p", {
       text: `Default path (vault-relative): ${defaultPath}`,
