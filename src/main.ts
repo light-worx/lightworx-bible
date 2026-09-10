@@ -52,12 +52,14 @@ interface BiblePluginSettings {
   dbPath: string;
   defaultTranslation: string;
   insertMode: "cursor" | "clipboard";
+  strongsEnabled: boolean;
 }
 
 const DEFAULT_SETTINGS: BiblePluginSettings = {
   dbPath: "",
-  defaultTranslation: "niv",
+  defaultTranslation: "bsb",
   insertMode: "clipboard",
+  strongsEnabled: true,
 };
 
 const VIEW_TYPE = "bible-study-view";
@@ -1434,7 +1436,7 @@ class BibleStudyView extends ItemView {
 
       // ── Verse block ────────────────────────────────────────────────────────
       const hasTagging = this.plugin.db.translationHasTagging(translation);
-      const hasStrongs = hasTagging && this.plugin.db.hasStrongsTable();
+      const hasStrongs = hasTagging && this.plugin.db.hasStrongsTable() && this.plugin.settings.strongsEnabled;
 
       // Use a ref so showStrongs can reference the panel even though it's
       // created AFTER the verse block (to get correct DOM ordering)
@@ -1673,7 +1675,7 @@ class BibleStudyView extends ItemView {
       const query = searchInput.value.trim();
 
       // Detect Strong's number search: H or G followed by digits
-      const isStrongs = strongsOverride || /^[HG]\d+$/i.test(query);
+      const isStrongs = (strongsOverride || /^[HG]\d+$/i.test(query)) && this.plugin.settings.strongsEnabled;
 
       if (!strongsOverride && !query) return;
       results.empty();
@@ -1941,6 +1943,7 @@ class BibleSettingTab extends PluginSettingTab {
     const eg3 = help.createEl("pre", { cls: "bible-help-pre" });
     eg3.createEl("code", { text: "book_id, chapter, verse, text\n1,1,1,In the beginning<S>7225 God<S>430 created..." });
     p("book_id follows the standard Bible book order (Genesis = 1, … Revelation = 66). Strong's tags <S>number are optional — include them for word-level lookup. The H/G prefix is added automatically (books 1–39 = Hebrew, 40–66 = Greek).");
+    p("The BSB (Berean Standard Bible) with Strong's numbers is bundled with this plugin and installed automatically. Additional translations can be imported here.");
 
     containerEl.createEl("hr");
     // ── Settings ──────────────────────────────────────────────────────────────
@@ -1978,6 +1981,20 @@ class BibleSettingTab extends PluginSettingTab {
         drop.onChange(async (value: "cursor" | "clipboard") => {
           this.plugin.settings.insertMode = value;
           await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Enable Strong's numbers")
+      .setDesc("When enabled, words in tagged translations (e.g. BSB, NASB) are underlined and clickable to show the original Hebrew or Greek lexicon entry. Disable if you prefer a cleaner reading experience without word-level tagging.")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.strongsEnabled ?? true);
+        toggle.onChange(async (value) => {
+          this.plugin.settings.strongsEnabled = value;
+          await this.plugin.saveSettings();
+          // Refresh the sidebar so passage re-renders without/with tagging
+          const leaves = this.plugin.app.workspace.getLeavesOfType(VIEW_TYPE);
+          if (leaves.length) (leaves[0].view as any).render?.();
         });
       });
 
@@ -2080,15 +2097,38 @@ export default class BibleStudyPlugin extends Plugin {
 
   async loadDatabase(): Promise<void> {
     const adapter = this.app.vault.adapter;
-    // Use a vault-relative path — works on both desktop and mobile
-    const defaultVaultPath = normalizePath(
-      `.obsidian/plugins/lightworx-bible/data/bible.db`
-    );
-    // If the user set a custom path assume it is also vault-relative;
-    // if they put an absolute path on desktop it will still be tried via the adapter
+    const defaultVaultPath = normalizePath(".obsidian/plugins/lightworx-bible/data/bible.db");
+    const bundledVaultPath = normalizePath(".obsidian/plugins/lightworx-bible/bible.db");
     const dbVaultPath = this.settings.dbPath
       ? normalizePath(this.settings.dbPath)
       : defaultVaultPath;
+
+    // ── First-run auto-install ─────────────────────────────────────────────────
+    // If the user DB doesn't exist yet, copy the bundled BSB+Strong's DB across.
+    // We only do this when using the default path — never touch a custom path.
+    if (!this.settings.dbPath) {
+      const exists = await adapter.exists(dbVaultPath);
+      if (!exists) {
+        try {
+          // Ensure data/ directory exists
+          const dataDir = normalizePath(".obsidian/plugins/lightworx-bible/data");
+          if (!(await adapter.exists(dataDir))) {
+            await adapter.mkdir(dataDir);
+          }
+
+          const bundledExists = await adapter.exists(bundledVaultPath);
+          if (bundledExists) {
+            const bundledData = await adapter.readBinary(bundledVaultPath);
+            await adapter.writeBinary(dbVaultPath, bundledData);
+            console.log("Bible plugin: installed bundled BSB database.");
+          } else {
+            console.warn("Bible plugin: bundled bible.db not found in plugin folder.");
+          }
+        } catch (e: any) {
+          console.error("Bible plugin: failed to install bundled database", e);
+        }
+      }
+    }
 
     console.log("Bible plugin: attempting to load DB from:", dbVaultPath);
     try {
