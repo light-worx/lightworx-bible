@@ -7,6 +7,7 @@ import {
   normalizePath,
   Plugin,
   PluginSettingTab,
+  requestUrl,
   Setting,
   WorkspaceLeaf,
   ItemView,
@@ -61,6 +62,9 @@ const DEFAULT_SETTINGS: BiblePluginSettings = {
   insertMode: "clipboard",
   strongsEnabled: true,
 };
+
+// URL of the bible.db release asset on GitHub — update this before each release
+const BSB_DB_URL = "https://github.com/light-worx/lightworx-bible/releases/latest/download/bible.db";
 
 const VIEW_TYPE = "bible-study-view";
 
@@ -985,6 +989,85 @@ class BibleQuickInsertModal extends Modal {
 
     insertBtn.onclick = doInsert;
     setTimeout(() => input.focus(), 50);
+  }
+
+  onClose(): void { this.contentEl.empty(); }
+}
+
+// ─── First-run Download Modal ─────────────────────────────────────────────────
+
+class BibleDownloadModal extends Modal {
+  private plugin: BibleStudyPlugin;
+  private dbVaultPath: string;
+  private onComplete: () => void;
+
+  constructor(app: App, plugin: BibleStudyPlugin, dbVaultPath: string, onComplete: () => void) {
+    super(app);
+    this.plugin = plugin;
+    this.dbVaultPath = dbVaultPath;
+    this.onComplete = onComplete;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "Welcome to Bible Study", cls: "bible-modal-title" });
+    contentEl.createEl("p", {
+      text: "No Bible database was found. Would you like to download the Berean Standard Bible (BSB) with Strong's numbers?",
+      cls: "bible-modal-hint",
+    });
+    contentEl.createEl("p", {
+      text: "The BSB is a free, modern translation released under Creative Commons (CC BY-SA 4.0). The download includes the full Bible text and Strong's Hebrew/Greek lexicon (~50 MB).",
+      cls: "bible-modal-hint",
+    });
+
+    const status = contentEl.createEl("p", { cls: "bible-modal-feedback" });
+
+    const progress = contentEl.createEl("progress") as HTMLProgressElement;
+    progress.style.cssText = "width:100%;height:12px;display:none;margin:8px 0;";
+
+    const btnRow = contentEl.createDiv({ cls: "bible-note-btn-row" });
+
+    const skipBtn = btnRow.createEl("button", { text: "Skip — I'll add a database manually", cls: "bible-btn bible-btn-danger" });
+    skipBtn.style.cssText = "width:auto;flex:0 0 auto;font-size:12px;";
+    skipBtn.onclick = () => this.close();
+
+    const downloadBtn = btnRow.createEl("button", { text: "Download BSB", cls: "bible-btn" });
+    downloadBtn.onclick = async () => {
+      downloadBtn.disabled = true;
+      skipBtn.disabled = true;
+      downloadBtn.setText("Downloading…");
+      progress.style.display = "";
+      progress.removeAttribute("value"); // indeterminate spinner
+
+      status.setText("Connecting to GitHub…");
+      try {
+        const response = await requestUrl({ url: BSB_DB_URL, method: "GET" });
+        status.setText("Saving database…");
+
+        const adapter = this.app.vault.adapter;
+        const dataDir = normalizePath(".obsidian/plugins/lightworx-bible/data");
+        if (!(await adapter.exists(dataDir))) await adapter.mkdir(dataDir);
+
+        // Slice to a clean ArrayBuffer (avoids mobile WASM buffer issue)
+        const buf = response.arrayBuffer;
+        await adapter.writeBinary(this.dbVaultPath, buf);
+
+        progress.value = 100;
+        status.setText("✓ Download complete.");
+        new Notice("Bible Study: BSB downloaded successfully.");
+
+        await new Promise(r => setTimeout(r, 600));
+        this.onComplete();
+        this.close();
+      } catch (e: any) {
+        progress.style.display = "none";
+        status.setText(`⚠ Download failed: ${e?.message ?? e}`);
+        downloadBtn.disabled = false;
+        downloadBtn.setText("Retry");
+        skipBtn.disabled = false;
+      }
+    };
   }
 
   onClose(): void { this.contentEl.empty(); }
@@ -2009,6 +2092,16 @@ class BibleSettingTab extends PluginSettingTab {
     // ── Import ────────────────────────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Bible Translations" });
 
+    new Setting(containerEl)
+      .setName("Download BSB database")
+      .setDesc("Download the Berean Standard Bible with Strong's numbers from GitHub (~50 MB). Only needed if you skipped the initial setup or want to reset to the default database.")
+      .addButton((btn) => btn.setButtonText("Download BSB").onClick(() => {
+        const defaultVaultPath = normalizePath(".obsidian/plugins/lightworx-bible/data/bible.db");
+        new BibleDownloadModal(this.app, this.plugin, defaultVaultPath, async () => {
+          await this.plugin.loadDatabase();
+        }).open();
+      }));
+
     // Installed translations list
     const renderInstalled = () => {
       installedEl.empty();
@@ -2098,42 +2191,25 @@ export default class BibleStudyPlugin extends Plugin {
   async loadDatabase(): Promise<void> {
     const adapter = this.app.vault.adapter;
     const defaultVaultPath = normalizePath(".obsidian/plugins/lightworx-bible/data/bible.db");
-    const bundledVaultPath = normalizePath(".obsidian/plugins/lightworx-bible/bible.db");
     const dbVaultPath = this.settings.dbPath
       ? normalizePath(this.settings.dbPath)
       : defaultVaultPath;
 
-    // ── First-run auto-install ─────────────────────────────────────────────────
-    // If the user DB doesn't exist yet, copy the bundled BSB+Strong's DB across.
-    // We only do this when using the default path — never touch a custom path.
-    if (!this.settings.dbPath) {
-      const exists = await adapter.exists(dbVaultPath);
-      if (!exists) {
-        try {
-          // Ensure data/ directory exists
-          const dataDir = normalizePath(".obsidian/plugins/lightworx-bible/data");
-          if (!(await adapter.exists(dataDir))) {
-            await adapter.mkdir(dataDir);
-          }
-
-          const bundledExists = await adapter.exists(bundledVaultPath);
-          if (bundledExists) {
-            const bundledData = await adapter.readBinary(bundledVaultPath);
-            await adapter.writeBinary(dbVaultPath, bundledData);
-            console.log("Bible plugin: installed bundled BSB database.");
-          } else {
-            console.warn("Bible plugin: bundled bible.db not found in plugin folder.");
-          }
-        } catch (e: any) {
-          console.error("Bible plugin: failed to install bundled database", e);
-        }
-      }
+    // ── First-run: offer to download BSB ─────────────────────────────────────
+    if (!this.settings.dbPath && !(await adapter.exists(dbVaultPath))) {
+      new BibleDownloadModal(this.app, this, dbVaultPath, async () => {
+        await this.loadDatabase();
+      }).open();
+      return; // loadDatabase will be called again by onComplete after download
     }
 
     console.log("Bible plugin: attempting to load DB from:", dbVaultPath);
     try {
       await this.db.load(adapter, dbVaultPath);
       console.log("Bible plugin: DB loaded successfully.");
+      // Refresh sidebar if open so it shows the newly loaded DB
+      const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
+      if (leaves.length) (leaves[0].view as any).render?.();
     } catch (e: any) {
       console.error("Bible plugin: DB load error", e);
       new Notice(`Bible plugin: could not load database.\nPath: ${dbVaultPath}\nError: ${e?.message ?? e}`);
