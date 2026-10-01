@@ -64,7 +64,7 @@ const DEFAULT_SETTINGS: BiblePluginSettings = {
 };
 
 // URL of the bible.db release asset on GitHub — update this before each release
-const BSB_DB_URL = "https://github.com/light-worx/lightworx-bible/releases/latest/download/bible.db";
+const BSB_DB_URL = "https://github.com/YOUR_USERNAME/lightworx-bible/releases/latest/download/bible.db";
 
 const VIEW_TYPE = "bible-study-view";
 
@@ -1363,6 +1363,13 @@ class BibleStudyView extends ItemView {
       this.currentMode = mode;
       setActive(mode);
       body.empty();
+      // Passage panel manages its own scroll via .bible-results;
+      // search and notes scroll the whole body
+      if (mode === "passage") {
+        body.removeClass("bible-body--scrollable");
+      } else {
+        body.addClass("bible-body--scrollable");
+      }
       if (!this.plugin.db.isLoaded()) {
         body.createEl("p", { text: "⚠  No database loaded. Set the path in Settings → Bible.", cls: "bible-notice" });
         return;
