@@ -2310,63 +2310,55 @@ export default class BibleStudyPlugin extends Plugin {
     if (fmMatch) {
       const key = fmMatch[1].trim();
 
-      // ctx.frontmatter is populated by Obsidian in the same render pass as
-      // the code block — more reliable than metadataCache on startup.
-      // Fall back to metadataCache for cases where ctx.frontmatter is absent.
-      const fm = ctx.frontmatter
-        ?? this.app.metadataCache.getFileCache(
-             this.app.vault.getAbstractFileByPath(ctx.sourcePath) as any
-           )?.frontmatter;
+      // Always look up the specific key — don't short-circuit on the whole
+      // frontmatter object, which may be {} (empty but not null/undefined)
+      const getFmVal = (): string | null => {
+        // ctx.frontmatter is a snapshot from render time
+        const fromCtx = ctx.frontmatter?.[key];
+        if (fromCtx) return String(fromCtx);
+        // Fresh lookup from the metadata cache
+        const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+        if (!file) return null;
+        const fromCache = this.app.metadataCache.getFileCache(file as any)?.frontmatter?.[key];
+        return fromCache ? String(fromCache) : null;
+      };
 
-      const val = fm?.[key];
+      const val = getFmVal();
 
       // ── Race condition 2: metadata cache not ready yet ────────────────────
-      // metadataCache.on('resolved') is a one-time startup event — if it has
-      // already fired before we register, we never get called. Instead we use
-      // a multi-pronged retry: exponential backoff + the 'changed' event for
-      // this specific file + the 'resolved' event as a bonus catch-all.
       if (!val) {
         el.createEl("p", { text: "⏳ Loading…", cls: "bible-block-error" });
 
         let done = false;
         const retry = () => {
           if (done) return;
+          done = true;
           el.empty();
           this.renderBibleBlock(source, el, ctx);
-          done = true;
         };
 
-        // Check whether the value has appeared yet, called on each attempt
-        const check = (): boolean => {
-          const freshFm = ctx.frontmatter
-            ?? this.app.metadataCache.getFileCache(
-                 this.app.vault.getAbstractFileByPath(ctx.sourcePath) as any
-               )?.frontmatter;
-          return !!freshFm?.[key];
-        };
-
-        // Exponential backoff: try at 150ms, 400ms, 1000ms, 2500ms
+        // Exponential backoff — cache usually resolves within a few hundred ms
         [150, 400, 1000, 2500].forEach(delay => {
-          setTimeout(() => { if (!done && check()) retry(); }, delay);
+          setTimeout(() => { if (!done && getFmVal()) retry(); }, delay);
         });
 
-        // Also listen for this file's cache entry being updated
+        // Fire when this specific file's cache entry is updated
         const changedRef = this.app.metadataCache.on("changed", (file) => {
           if (done || file.path !== ctx.sourcePath) return;
           this.app.metadataCache.offref(changedRef);
-          if (check()) retry();
+          if (getFmVal()) retry();
         });
 
-        // And catch the resolved event in case we're early enough for it
+        // Catch the one-time resolved event if we happen to be early enough
         const resolvedRef = this.app.metadataCache.on("resolved", () => {
           this.app.metadataCache.offref(resolvedRef);
-          if (!done && check()) retry();
+          if (!done && getFmVal()) retry();
         });
 
         return;
       }
 
-      refStr = String(val).trim();
+      refStr = val;
     }
 
     const parsed = parseReference(
