@@ -2151,6 +2151,18 @@ class BibleSettingTab extends PluginSettingTab {
 export default class BibleStudyPlugin extends Plugin {
   settings!: BiblePluginSettings;
   db: BibleDatabase = new BibleDatabase();
+  private dbLoadCallbacks: (() => void)[] = [];
+
+  /** Call cb immediately if DB is ready, otherwise queue it for when it loads */
+  onDbReady(cb: () => void): void {
+    if (this.db.isLoaded()) cb();
+    else this.dbLoadCallbacks.push(cb);
+  }
+
+  private flushDbCallbacks(): void {
+    const cbs = this.dbLoadCallbacks.splice(0);
+    cbs.forEach(cb => cb());
+  }
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -2214,7 +2226,9 @@ export default class BibleStudyPlugin extends Plugin {
     try {
       await this.db.load(adapter, dbVaultPath);
       console.log("Bible plugin: DB loaded successfully.");
-      // Refresh sidebar if open so it shows the newly loaded DB
+      // Flush any code blocks that were waiting for the DB
+      this.flushDbCallbacks();
+      // Refresh sidebar if open
       const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
       if (leaves.length) (leaves[0].view as any).render?.();
     } catch (e: any) {
@@ -2274,30 +2288,57 @@ export default class BibleStudyPlugin extends Plugin {
   renderBibleBlock(source: string, el: HTMLElement, ctx: any): void {
     el.addClass("bible-block");
 
-    const renderError = (msg: string) => {
-      el.createEl("p", { text: `⚠ Bible: ${msg}`, cls: "bible-block-error" });
-    };
-
+    // ── Race condition 1: DB not loaded yet ───────────────────────────────────
+    // Queue a re-render for when the DB is ready rather than showing an error
     if (!this.db.isLoaded()) {
-      renderError("Database not loaded. Check plugin settings.");
+      el.createEl("p", { text: "⏳ Loading Bible database…", cls: "bible-block-error" });
+      this.onDbReady(() => {
+        el.empty();
+        this.renderBibleBlock(source, el, ctx);
+      });
       return;
     }
 
-    // Resolve the reference string — either direct or from frontmatter
+    const renderError = (msg: string) => {
+      el.empty();
+      el.createEl("p", { text: `⚠ Bible: ${msg}`, cls: "bible-block-error" });
+    };
+
+    // ── Resolve the reference — direct or from frontmatter ────────────────────
     let refStr = source;
     const fmMatch = source.match(/^frontmatter:(.+)$/i);
     if (fmMatch) {
       const key = fmMatch[1].trim();
-      const file = this.app.workspace.getActiveFile()
-        ?? this.app.vault.getFiles().find(f => f.path === ctx.sourcePath);
-      if (!file) { renderError(`Could not resolve frontmatter key "${key}".`); return; }
-      const meta = this.app.metadataCache.getFileCache(file)?.frontmatter;
-      const val = meta?.[key];
-      if (!val) { renderError(`Frontmatter key "${key}" not found or empty.`); return; }
+
+      // ctx.frontmatter is populated by Obsidian in the same render pass as
+      // the code block — more reliable than metadataCache on startup.
+      // Fall back to metadataCache for cases where ctx.frontmatter is absent.
+      const fm = ctx.frontmatter
+        ?? this.app.metadataCache.getFileCache(
+             this.app.vault.getAbstractFileByPath(ctx.sourcePath) as any
+           )?.frontmatter;
+
+      const val = fm?.[key];
+
+      // ── Race condition 2: metadata cache not ready yet ────────────────────
+      // If frontmatter is still null, wait for the cache to resolve then retry
+      if (!val) {
+        el.createEl("p", { text: "⏳ Waiting for note metadata…", cls: "bible-block-error" });
+        const ref = this.app.metadataCache.on("resolved", () => {
+          this.app.metadataCache.offref(ref);
+          el.empty();
+          this.renderBibleBlock(source, el, ctx);
+        });
+        return;
+      }
+
       refStr = String(val).trim();
     }
 
-    const parsed = parseReference(refStr, this.db.getBookList(), this.settings.defaultTranslation, this.db.getTranslations());
+    const parsed = parseReference(
+      refStr, this.db.getBookList(),
+      this.settings.defaultTranslation, this.db.getTranslations()
+    );
     if (!parsed) {
       renderError(`Could not parse reference "${refStr}". Try e.g. "John 1:1-10 NIV".`);
       return;
@@ -2307,17 +2348,17 @@ export default class BibleStudyPlugin extends Plugin {
       parsed.translation, parsed.book.id, parsed.chapter, parsed.startVerse, parsed.endVerse
     );
     if (!verses.length) {
-      renderError(`No verses found for ${refStr}.`);
+      renderError(`No verses found for "${refStr}".`);
       return;
     }
 
     // ── Render ────────────────────────────────────────────────────────────────
+    el.empty();
     const refPart = parsed.endVerse > parsed.startVerse
       ? `${parsed.startVerse}–${parsed.endVerse}` : `${parsed.startVerse}`;
     const heading = `${parsed.book.book} ${parsed.chapter}:${refPart} (${parsed.translation.toUpperCase()})`;
 
     el.createEl("div", { text: heading, cls: "bible-block-ref" });
-
     const block = el.createDiv("bible-block-body");
     verses.forEach((v) => {
       const vEl = block.createEl("span", { cls: "bible-block-verse" });
