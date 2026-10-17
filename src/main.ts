@@ -2321,14 +2321,48 @@ export default class BibleStudyPlugin extends Plugin {
       const val = fm?.[key];
 
       // ── Race condition 2: metadata cache not ready yet ────────────────────
-      // If frontmatter is still null, wait for the cache to resolve then retry
+      // metadataCache.on('resolved') is a one-time startup event — if it has
+      // already fired before we register, we never get called. Instead we use
+      // a multi-pronged retry: exponential backoff + the 'changed' event for
+      // this specific file + the 'resolved' event as a bonus catch-all.
       if (!val) {
-        el.createEl("p", { text: "⏳ Waiting for note metadata…", cls: "bible-block-error" });
-        const ref = this.app.metadataCache.on("resolved", () => {
-          this.app.metadataCache.offref(ref);
+        el.createEl("p", { text: "⏳ Loading…", cls: "bible-block-error" });
+
+        let done = false;
+        const retry = () => {
+          if (done) return;
           el.empty();
           this.renderBibleBlock(source, el, ctx);
+          done = true;
+        };
+
+        // Check whether the value has appeared yet, called on each attempt
+        const check = (): boolean => {
+          const freshFm = ctx.frontmatter
+            ?? this.app.metadataCache.getFileCache(
+                 this.app.vault.getAbstractFileByPath(ctx.sourcePath) as any
+               )?.frontmatter;
+          return !!freshFm?.[key];
+        };
+
+        // Exponential backoff: try at 150ms, 400ms, 1000ms, 2500ms
+        [150, 400, 1000, 2500].forEach(delay => {
+          setTimeout(() => { if (!done && check()) retry(); }, delay);
         });
+
+        // Also listen for this file's cache entry being updated
+        const changedRef = this.app.metadataCache.on("changed", (file) => {
+          if (done || file.path !== ctx.sourcePath) return;
+          this.app.metadataCache.offref(changedRef);
+          if (check()) retry();
+        });
+
+        // And catch the resolved event in case we're early enough for it
+        const resolvedRef = this.app.metadataCache.on("resolved", () => {
+          this.app.metadataCache.offref(resolvedRef);
+          if (!done && check()) retry();
+        });
+
         return;
       }
 
