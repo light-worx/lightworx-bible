@@ -1173,3 +1173,10 @@
   padding: 12px 12px 16px;
   gap: 8px;
 }
+
+/* Several readings in one ```bible block */
+.bible-block-reading + .bible-block-reading {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+}

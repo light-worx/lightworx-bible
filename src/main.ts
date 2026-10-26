@@ -178,6 +178,21 @@ class BibleDatabase {
     return result.length ? result[0].values[0][0] : 0;
   }
 
+  /** Verses from (startChapter:startVerse) through (endChapter:endVerse), crossing chapter boundaries */
+  getPassageRange(translation: string, bookId: number, startChapter: number, startVerse: number, endChapter: number, endVerse: number): BibleVerse[] {
+    if (!this.db) return [];
+    const n = (x: number) => Math.trunc(Number(x));   // all values are numeric — keep them that way
+    const res = this.db.exec(
+      `SELECT book_id, chapter, verse, words FROM ${translation}_verses
+       WHERE book_id = ${n(bookId)}
+         AND (chapter > ${n(startChapter)} OR (chapter = ${n(startChapter)} AND verse >= ${n(startVerse)}))
+         AND (chapter < ${n(endChapter)}   OR (chapter = ${n(endChapter)}   AND verse <= ${n(endVerse)}))
+       ORDER BY chapter, verse`
+    );
+    if (!res.length) return [];
+    return res[0].values.map((r: any[]) => ({ book_id: r[0], chapter: r[1], verse: r[2], words: r[3] }));
+  }
+
   getPassage(translation: string, bookId: number, chapter: number, startVerse: number, endVerse: number): BibleVerse[] {
     if (!this.db) return [];
     const result = this.db.exec(
@@ -618,37 +633,183 @@ class BibleDatabase {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-interface ParsedRef {
-  book: Book;
-  chapter: number;
+// ─── Reference parsing ────────────────────────────────────────────────────────
+// Understands (readings are separated by ";" or a new line, each with its own book):
+//   John 3:16               a single verse
+//   John 1:1-3,5,6-8        verses and ranges within one chapter
+//   John 1:1-5,2:3-6,7,3:10 an item like "2:3" switches chapter; bare numbers after it are verses of that chapter
+//   John 1:51-2:2           a range that crosses a chapter boundary
+//   Psalm 1  /  Psalm 1-3   whole chapter(s)
+//   Jude 5-7                one-chapter books take bare verse numbers
+//   Psalm 3:4-5 NIV         optional trailing translation (applies to every reading without its own)
+
+const END_OF_CHAPTER = 999;
+
+interface RefSegment {
+  startChapter: number;
   startVerse: number;
-  endVerse: number;
-  translation: string;
+  endChapter: number;
+  endVerse: number;      // END_OF_CHAPTER = through the last verse of endChapter
 }
 
-function parseReference(raw: string, books: Book[], defaultTranslation: string, translations?: string[]): ParsedRef | null {
-  const s = raw.replace(/^\{\{|\}\}$/g, "").trim();
-  // Match any known translation suffix, or fall back to a generic 2-5 uppercase letter word
-  const transPattern = translations && translations.length
-    ? `(${translations.map(t => t.toUpperCase()).join("|")})`
-    : `([A-Z]{2,5})`;
-  const transMatch = s.match(new RegExp(`\\s+${transPattern}$`, "i"));
-  const translation = transMatch ? transMatch[1].toLowerCase() : defaultTranslation;
-  const refStr = transMatch ? s.slice(0, -transMatch[0].length).trim() : s;
-  const m = refStr.match(/^(.+?)\s+(\d+):(\d+)(?:-(\d+))?$/);
-  if (!m) return null;
-  const [, bookRaw, chapterStr, startStr, endStr] = m;
-  const chapter = parseInt(chapterStr);
-  const startVerse = parseInt(startStr);
-  const endVerse = endStr ? parseInt(endStr) : startVerse;
-  const bookQuery = bookRaw.trim().toLowerCase();
-  const book =
-    books.find((b) => b.book.toLowerCase() === bookQuery) ??
-    books.find((b) => b.abbreviation.toLowerCase() === bookQuery) ??
-    books.find((b) => b.book.toLowerCase().startsWith(bookQuery));
-  if (!book) return null;
-  return { book, chapter, startVerse, endVerse, translation };
+interface ParsedReading {
+  book: Book;
+  translation: string;
+  segments: RefSegment[];
 }
+
+type ParseResult =
+  | { ok: true; readings: ParsedReading[] }
+  | { ok: false; error: string };
+
+interface ResolvedReading {
+  heading: string;       // e.g. "John 1:1–3, 5 (NIV)"
+  translation: string;
+  verses: BibleVerse[];
+}
+
+/** Parse the part after the book name, e.g. "1:1-5,2:3-6,7,3:10". Throws Error with a readable message. */
+function parseSegments(body: string, book: Book): RefSegment[] {
+  const segments: RefSegment[] = [];
+  // In a one-chapter book (Jude, Obadiah, Philemon, 2 & 3 John) bare numbers are verses
+  let currentChapter: number | null = book.chapters === 1 ? 1 : null;
+
+  for (const rawToken of body.split(",")) {
+    const token = rawToken.trim();
+    if (!token) throw new Error(`There is an empty item between commas in "${body.trim()}".`);
+
+    // ch:v   ch:v-v   ch:v-ch:v
+    let m = token.match(/^(\d+):(\d+)(?:\s*[-–—]\s*(?:(\d+):)?(\d+))?$/);
+    if (m) {
+      const startChapter = parseInt(m[1]);
+      const startVerse = parseInt(m[2]);
+      const endChapter = m[3] ? parseInt(m[3]) : startChapter;
+      const endVerse = m[4] ? parseInt(m[4]) : startVerse;
+      segments.push({ startChapter, startVerse, endChapter, endVerse });
+      currentChapter = endChapter;
+      continue;
+    }
+
+    // n   n-n  → verses once we are inside a chapter, otherwise whole chapters
+    m = token.match(/^(\d+)(?:\s*[-–—]\s*(\d+))?$/);
+    if (m) {
+      const a = parseInt(m[1]);
+      const b = m[2] ? parseInt(m[2]) : a;
+      if (currentChapter !== null) {
+        segments.push({ startChapter: currentChapter, startVerse: a, endChapter: currentChapter, endVerse: b });
+      } else {
+        segments.push({ startChapter: a, startVerse: 1, endChapter: b, endVerse: END_OF_CHAPTER });
+      }
+      continue;
+    }
+
+    throw new Error(`Couldn't understand "${token}".`);
+  }
+
+  for (const s of segments) {
+    if (s.startChapter < 1 || s.endChapter < 1 || s.startChapter > book.chapters || s.endChapter > book.chapters) {
+      throw new Error(`${book.book} has only ${book.chapters} chapter${book.chapters === 1 ? "" : "s"}.`);
+    }
+    if (s.startVerse < 1 || s.endVerse < 1) throw new Error("Verse numbers start at 1.");
+    const backwards = s.startChapter > s.endChapter ||
+      (s.startChapter === s.endChapter && s.startVerse > s.endVerse);
+    if (backwards) throw new Error(`"${formatSegments([s])}" runs backwards.`);
+  }
+  return segments;
+}
+
+function parseReferences(raw: string, books: Book[], defaultTranslation: string, translations: string[]): ParseResult {
+  const cleaned = raw.replace(/^\s*\{\{|\}\}\s*$/g, "").trim();
+  if (!cleaned) return { ok: false, error: "Type a reference, e.g. John 3:16." };
+
+  const known = translations.map((t) => t.toLowerCase());
+  const parts = cleaned.split(/[;\n]+/).map((p) => p.trim()).filter(Boolean);
+  const REF_SHAPE = /^(.+?)\s+(\d[\d:,\s\-–—]*)$/;   // "<book> <numbers>"
+  const drafts: { book: Book; segments: RefSegment[]; translation: string | null }[] = [];
+
+  for (const part of parts) {
+    let translation: string | null = null;
+    let m = part.match(REF_SHAPE);
+
+    // Optional trailing translation, e.g. "John 3:16 NIV"
+    if (!m) {
+      const tm = part.match(/^(.+?)\s+([A-Za-z][A-Za-z0-9]*)$/);
+      const inner = tm ? tm[1].match(REF_SHAPE) : null;
+      if (tm && inner) {
+        translation = tm[2].toLowerCase();
+        if (!known.includes(translation)) return { ok: false, error: `Translation "${tm[2]}" isn't installed.` };
+        m = inner;
+      }
+    }
+    if (!m) return { ok: false, error: `Couldn't read "${part}" as a Bible reference.` };
+
+    const bookQuery = m[1].trim().toLowerCase().replace(/\./g, "").replace(/\s+/g, " ");
+    const book =
+      books.find((b) => b.book.toLowerCase() === bookQuery) ??
+      books.find((b) => b.abbreviation.toLowerCase().replace(/\./g, "") === bookQuery) ??
+      books.find((b) => b.book.toLowerCase().startsWith(bookQuery));
+    if (!book) return { ok: false, error: `Unknown book "${m[1].trim()}".` };
+
+    try {
+      drafts.push({ book, segments: parseSegments(m[2], book), translation });
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
+  }
+  if (!drafts.length) return { ok: false, error: "Type a reference, e.g. John 3:16." };
+
+  // A translation on the final reading applies to every reading that has none of its own
+  const shared = drafts[drafts.length - 1].translation ?? defaultTranslation.toLowerCase();
+  const readings: ParsedReading[] = drafts.map((d) => ({
+    book: d.book, segments: d.segments, translation: d.translation ?? shared,
+  }));
+  const missing = readings.find((r) => !known.includes(r.translation));
+  if (missing) return { ok: false, error: `Translation "${missing.translation.toUpperCase()}" isn't installed.` };
+  return { ok: true, readings };
+}
+
+/** "1:1–5; 2:3–6, 7; 3:10" — commas within a chapter, semicolons between chapters */
+function formatSegments(segments: RefSegment[]): string {
+  let out = "";
+  let joinChapter: number | null = null;   // chapter a following bare verse would belong to
+  segments.forEach((s, i) => {
+    const endV = (v: number) => (v === END_OF_CHAPTER ? "end" : String(v));
+    let text: string;
+    let comma = false;
+    if (s.startVerse === 1 && s.endVerse === END_OF_CHAPTER) {
+      text = s.startChapter === s.endChapter ? `${s.startChapter}` : `${s.startChapter}–${s.endChapter}`;
+      joinChapter = null;
+    } else if (s.startChapter === s.endChapter) {
+      const verses = s.startVerse === s.endVerse ? `${s.startVerse}` : `${s.startVerse}–${endV(s.endVerse)}`;
+      if (joinChapter === s.startChapter) { text = verses; comma = true; }
+      else text = `${s.startChapter}:${verses}`;
+      joinChapter = s.startChapter;
+    } else {
+      text = `${s.startChapter}:${s.startVerse}–${s.endChapter}:${endV(s.endVerse)}`;
+      joinChapter = s.endChapter;
+    }
+    if (i > 0) out += comma ? ", " : "; ";
+    out += text;
+  });
+  return out;
+}
+
+/** Verse labels: plain verse numbers, switching to "ch:v" whenever the chapter changes */
+function labelVerses(verses: BibleVerse[]): { label: string; v: BibleVerse }[] {
+  let prevChapter: number | null = null;
+  return verses.map((v) => {
+    const label = prevChapter !== null && v.chapter !== prevChapter ? `${v.chapter}:${v.verse}` : String(v.verse);
+    prevChapter = v.chapter;
+    return { label, v };
+  });
+}
+
+/** Plain-text form used for clipboard / insertion */
+function readingToText(r: ResolvedReading): string {
+  const body = labelVerses(r.verses).map(({ label, v }) => `${label} ${v.words}`).join(" ");
+  return `${r.heading}\n${body}`;
+}
+// ─── end reference parsing ────────────────────────────────────────────────────
 
 /** Human-readable scope label for a note, e.g. "John 3:16–18" or "Romans (whole book)" */
 function noteRefLabel(note: BibleNote, books: Book[]): string {
@@ -909,7 +1070,7 @@ class BibleQuickInsertModal extends Modal {
     contentEl.empty();
     contentEl.createEl("h3", { text: "Insert Bible Passage", cls: "bible-modal-title" });
     contentEl.createEl("p", {
-      text: 'Type a reference, e.g.  John 3:16  or  Romans 8:1-4 NIV',
+      text: 'Type a reference, e.g.  John 3:16 · Romans 8:1-4 NIV · John 1:1-3,5 · Psalm 1 · John 1:1-10; Psalm 3:4-5',
       cls: "bible-modal-hint",
     });
 
@@ -928,46 +1089,29 @@ class BibleQuickInsertModal extends Modal {
     });
     insertBtn.disabled = true;
 
-    let lastParsed: ParsedRef | null = null;
-    let lastVerses: BibleVerse[] = [];
+    let lastReadings: ResolvedReading[] = [];
 
     const tryParse = () => {
       const val = input.value.trim();
       preview.empty();
       feedback.setText("");
       insertBtn.disabled = true;
-      lastParsed = null;
-      lastVerses = [];
+      lastReadings = [];
 
       if (!val) return;
 
-      const parsed = parseReference(val, this.plugin.db.getBookList(), this.plugin.settings.defaultTranslation, this.plugin.db.getTranslations());
-      if (!parsed) {
-        feedback.setText('⚠  Reference not recognised — try e.g. "John 3:16" or "Rom 8:1-4 GNT"');
-        return;
-      }
+      const result = this.plugin.resolveReference(val);
+      if (!result.ok) { feedback.setText(`⚠  ${result.error}`); return; }
 
-      const verses = this.plugin.db.getPassage(
-        parsed.translation, parsed.book.id, parsed.chapter, parsed.startVerse, parsed.endVerse
-      );
-
-      if (!verses.length) {
-        feedback.setText("⚠  No verses found for that reference.");
-        return;
-      }
-
-      lastParsed = parsed;
-      lastVerses = verses;
-
-      const refPart = parsed.endVerse > parsed.startVerse
-        ? `${parsed.startVerse}–${parsed.endVerse}` : `${parsed.startVerse}`;
-      const refLine = `${parsed.book.book} ${parsed.chapter}:${refPart} (${parsed.translation.toUpperCase()})`;
-      preview.createEl("div", { text: refLine, cls: "bible-ref" });
-      const block = preview.createDiv("bible-verse-block");
-      verses.forEach((v) => {
-        const vEl = block.createDiv("bible-verse");
-        vEl.createEl("sup", { text: String(v.verse), cls: "bible-verse-num" });
-        vEl.createSpan({ text: " " + v.words });
+      lastReadings = result.readings;
+      result.readings.forEach((r) => {
+        preview.createEl("div", { text: r.heading, cls: "bible-ref" });
+        const block = preview.createDiv("bible-verse-block");
+        labelVerses(r.verses).forEach(({ label, v }) => {
+          const vEl = block.createDiv("bible-verse");
+          vEl.createEl("sup", { text: label, cls: "bible-verse-num" });
+          vEl.createSpan({ text: " " + v.words });
+        });
       });
       insertBtn.disabled = false;
     };
@@ -978,12 +1122,8 @@ class BibleQuickInsertModal extends Modal {
     });
 
     const doInsert = () => {
-      if (!lastParsed || !lastVerses.length) return;
-      const refPart = lastParsed.endVerse > lastParsed.startVerse
-        ? `${lastParsed.startVerse}–${lastParsed.endVerse}` : `${lastParsed.startVerse}`;
-      const ref = `${lastParsed.book.book} ${lastParsed.chapter}:${refPart} (${lastParsed.translation.toUpperCase()})`;
-      const text = lastVerses.map((v) => `${v.verse} ${v.words}`).join(" ");
-      this.plugin.deliverText(`${ref}\n${text}\n`);
+      if (!lastReadings.length) return;
+      this.plugin.deliverText(lastReadings.map(readingToText).join("\n\n") + "\n");
       this.close();
     };
 
@@ -2006,7 +2146,13 @@ class BibleSettingTab extends PluginSettingTab {
     p("Paste a code block with the language set to bible anywhere in a note. In Reading mode the passage renders inline from the database:");
     const eg1 = help.createEl("pre", { cls: "bible-help-pre" });
     eg1.createEl("code", { text: "```bible\nJohn 3:16 NIV\n```" });
-    p("The translation is optional — if omitted your default translation is used. Ranges work too: Romans 8:1-4 GNT");
+    p("The translation is optional — if omitted your default translation is used.");
+
+    section("Reference syntax");
+    p("The same syntax works in code blocks, {{…}} tags, frontmatter readings and the quick insert modal:");
+    const eg4 = help.createEl("pre", { cls: "bible-help-pre" });
+    eg4.createEl("code", { text: "John 3:16\nJohn 1:1-3,5,6-8\nJohn 1:1-5,2:3-6,7,3:10\nJohn 1:51-2:2\nPsalm 1   or   Psalm 1-3\nJohn 1:1-10; Psalm 3:4-5 NIV" });
+    p("A comma separates verses or ranges within a chapter. An item such as 2:3 switches chapter, and bare numbers after it are verses of that chapter. A semicolon (or a new line) separates readings, and each reading has its own book. A bare chapter such as Psalm 1 means the whole chapter. A translation at the end applies to every reading that doesn't name its own.");
 
     section("Frontmatter-driven block — sermon template");
     p("Add a reading key to your note's frontmatter, then reference it in a code block:");
@@ -2263,17 +2409,9 @@ export default class BibleStudyPlugin extends Plugin {
 
     while ((match = pattern.exec(content)) !== null) {
       const original = match[0];
-      const parsed = parseReference(original, this.db.getBookList(), this.settings.defaultTranslation, this.db.getTranslations());
-      if (!parsed) continue;
-      const verses = this.db.getPassage(
-        parsed.translation, parsed.book.id, parsed.chapter, parsed.startVerse, parsed.endVerse
-      );
-      if (!verses.length) continue;
-      const refPart = parsed.endVerse > parsed.startVerse
-        ? `${parsed.startVerse}–${parsed.endVerse}` : `${parsed.startVerse}`;
-      const ref = `${parsed.book.book} ${parsed.chapter}:${refPart} (${parsed.translation.toUpperCase()})`;
-      const text = verses.map((v) => `${v.verse} ${v.words}`).join(" ");
-      replacements.push({ original, replacement: `${ref}\n${text}` });
+      const result = this.resolveReference(original);
+      if (!result.ok) continue;
+      replacements.push({ original, replacement: result.readings.map(readingToText).join("\n\n") });
       count++;
     }
 
@@ -2283,6 +2421,29 @@ export default class BibleStudyPlugin extends Plugin {
     }
     editor.setValue(newContent);
     new Notice(`Expanded ${count} Bible reference${count === 1 ? "" : "s"}.`);
+  }
+
+  /** Parse a reference string and fetch the verses for every reading in it */
+  resolveReference(raw: string): { ok: true; readings: ResolvedReading[] } | { ok: false; error: string } {
+    const parsed = parseReferences(raw, this.db.getBookList(), this.settings.defaultTranslation, this.db.getTranslations());
+    if (!parsed.ok) return parsed;
+
+    const readings: ResolvedReading[] = [];
+    for (const r of parsed.readings) {
+      const seen = new Set<string>();
+      const verses: BibleVerse[] = [];
+      for (const s of r.segments) {
+        const found = this.db.getPassageRange(r.translation, r.book.id, s.startChapter, s.startVerse, s.endChapter, s.endVerse);
+        for (const v of found) {
+          const key = `${v.chapter}:${v.verse}`;
+          if (!seen.has(key)) { seen.add(key); verses.push(v); }   // ignore overlaps like "1:1-5,3-7"
+        }
+      }
+      const label = `${r.book.book} ${formatSegments(r.segments)}`;
+      if (!verses.length) return { ok: false, error: `No verses found for ${label}.` };
+      readings.push({ heading: `${label} (${r.translation.toUpperCase()})`, translation: r.translation, verses });
+    }
+    return { ok: true, readings };
   }
 
   renderBibleBlock(source: string, el: HTMLElement, ctx: any): void {
@@ -2312,15 +2473,19 @@ export default class BibleStudyPlugin extends Plugin {
 
       // Always look up the specific key — don't short-circuit on the whole
       // frontmatter object, which may be {} (empty but not null/undefined)
+      // A YAML list becomes "a; b" so its items are treated as separate readings
+      const toStr = (x: any): string | null => {
+        if (x === undefined || x === null || x === "") return null;
+        return Array.isArray(x) ? x.map(String).join("; ") : String(x);
+      };
       const getFmVal = (): string | null => {
         // ctx.frontmatter is a snapshot from render time
-        const fromCtx = ctx.frontmatter?.[key];
-        if (fromCtx) return String(fromCtx);
+        const fromCtx = toStr(ctx.frontmatter?.[key]);
+        if (fromCtx) return fromCtx;
         // Fresh lookup from the metadata cache
         const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
         if (!file) return null;
-        const fromCache = this.app.metadataCache.getFileCache(file as any)?.frontmatter?.[key];
-        return fromCache ? String(fromCache) : null;
+        return toStr(this.app.metadataCache.getFileCache(file as any)?.frontmatter?.[key]);
       };
 
       const val = getFmVal();
@@ -2361,35 +2526,23 @@ export default class BibleStudyPlugin extends Plugin {
       refStr = val;
     }
 
-    const parsed = parseReference(
-      refStr, this.db.getBookList(),
-      this.settings.defaultTranslation, this.db.getTranslations()
-    );
-    if (!parsed) {
-      renderError(`Could not parse reference "${refStr}". Try e.g. "John 1:1-10 NIV".`);
-      return;
-    }
-
-    const verses = this.db.getPassage(
-      parsed.translation, parsed.book.id, parsed.chapter, parsed.startVerse, parsed.endVerse
-    );
-    if (!verses.length) {
-      renderError(`No verses found for "${refStr}".`);
+    const result = this.resolveReference(refStr);
+    if (!result.ok) {
+      renderError(`${result.error}  (reference: "${refStr}")`);
       return;
     }
 
     // ── Render ────────────────────────────────────────────────────────────────
     el.empty();
-    const refPart = parsed.endVerse > parsed.startVerse
-      ? `${parsed.startVerse}–${parsed.endVerse}` : `${parsed.startVerse}`;
-    const heading = `${parsed.book.book} ${parsed.chapter}:${refPart} (${parsed.translation.toUpperCase()})`;
-
-    el.createEl("div", { text: heading, cls: "bible-block-ref" });
-    const block = el.createDiv("bible-block-body");
-    verses.forEach((v) => {
-      const vEl = block.createEl("span", { cls: "bible-block-verse" });
-      vEl.createEl("sup", { text: String(v.verse), cls: "bible-block-verse-num" });
-      vEl.createSpan({ text: v.words + " " });
+    result.readings.forEach((r) => {
+      const readingEl = el.createDiv("bible-block-reading");
+      readingEl.createEl("div", { text: r.heading, cls: "bible-block-ref" });
+      const block = readingEl.createDiv("bible-block-body");
+      labelVerses(r.verses).forEach(({ label, v }) => {
+        const vEl = block.createEl("span", { cls: "bible-block-verse" });
+        vEl.createEl("sup", { text: label, cls: "bible-block-verse-num" });
+        vEl.createSpan({ text: v.words + " " });
+      });
     });
   }
 
