@@ -1180,3 +1180,58 @@
   padding-top: 8px;
   border-top: 1px solid var(--background-modifier-border);
 }
+
+/* ── Find notes using a passage ───────────────────────── */
+
+.bible-usage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+  margin-top: 6px;
+}
+
+.bible-usage-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-left: 3px solid var(--interactive-accent);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.bible-usage-row:hover { background: var(--background-modifier-hover); }
+
+.bible-usage-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.bible-usage-folder {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.bible-usage-matches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.bible-usage-chip {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+.bible-usage-chip--same {
+  background: rgba(74, 144, 217, 0.18);
+  color: var(--text-accent);
+}

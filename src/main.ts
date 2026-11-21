@@ -54,6 +54,7 @@ interface BiblePluginSettings {
   defaultTranslation: string;
   insertMode: "cursor" | "clipboard";
   strongsEnabled: boolean;
+  readingProperty: string;   // frontmatter key holding a note's Bible reading
 }
 
 const DEFAULT_SETTINGS: BiblePluginSettings = {
@@ -61,6 +62,7 @@ const DEFAULT_SETTINGS: BiblePluginSettings = {
   defaultTranslation: "bsb",
   insertMode: "clipboard",
   strongsEnabled: true,
+  readingProperty: "reading",
 };
 
 // URL of the bible.db release asset on GitHub — update this before each release
@@ -718,7 +720,7 @@ function parseSegments(body: string, book: Book): RefSegment[] {
   return segments;
 }
 
-function parseReferences(raw: string, books: Book[], defaultTranslation: string, translations: string[]): ParseResult {
+function parseReferences(raw: string, books: Book[], defaultTranslation: string, translations: string[], ignoreUnknownTranslation = false): ParseResult {
   const cleaned = raw.replace(/^\s*\{\{|\}\}\s*$/g, "").trim();
   if (!cleaned) return { ok: false, error: "Type a reference, e.g. John 3:16." };
 
@@ -737,7 +739,7 @@ function parseReferences(raw: string, books: Book[], defaultTranslation: string,
       const inner = tm ? tm[1].match(REF_SHAPE) : null;
       if (tm && inner) {
         translation = tm[2].toLowerCase();
-        if (!known.includes(translation)) return { ok: false, error: `Translation "${tm[2]}" isn't installed.` };
+        if (!known.includes(translation) && !ignoreUnknownTranslation) return { ok: false, error: `Translation "${tm[2]}" isn't installed.` };
         m = inner;
       }
     }
@@ -763,7 +765,7 @@ function parseReferences(raw: string, books: Book[], defaultTranslation: string,
   const readings: ParsedReading[] = drafts.map((d) => ({
     book: d.book, segments: d.segments, translation: d.translation ?? shared,
   }));
-  const missing = readings.find((r) => !known.includes(r.translation));
+  const missing = ignoreUnknownTranslation ? undefined : readings.find((r) => !known.includes(r.translation));
   if (missing) return { ok: false, error: `Translation "${missing.translation.toUpperCase()}" isn't installed.` };
   return { ok: true, readings };
 }
@@ -810,6 +812,128 @@ function readingToText(r: ResolvedReading): string {
   return `${r.heading}\n${body}`;
 }
 // ─── end reference parsing ────────────────────────────────────────────────────
+
+// ─── Passage usage index ──────────────────────────────────────────────────────
+// Finds the notes whose reading overlaps a passage, e.g. searching John 1:5 finds a note reading John 1:1-18.
+
+interface IndexedReading {
+  bookId: number;
+  segments: RefSegment[];
+  label: string;                      // e.g. "John 1:1–18"
+  source: "property" | "block";       // where in the note the reading came from
+}
+
+interface IndexedNote {
+  path: string;
+  mtime: number;
+  readings: IndexedReading[];         // empty when the note has no readings
+}
+
+type Relation = "same" | "includes" | "within" | "overlaps";
+interface UsageMatch { label: string; relation: Relation; source: "property" | "block" }
+interface UsageHit { path: string; mtime: number; matches: UsageMatch[]; rank: number }
+
+const RELATION_RANK: Record<Relation, number> = { same: 0, includes: 1, within: 2, overlaps: 3 };
+const RELATION_TEXT: Record<Relation, string> = {
+  same: "same passage",
+  includes: "includes this passage",
+  within: "inside this passage",
+  overlaps: "overlaps",
+};
+
+/** A frontmatter value as a reference string; a YAML list becomes "a; b" so its items are separate readings */
+function refValueToString(x: any): string | null {
+  if (x === undefined || x === null || x === "") return null;
+  return Array.isArray(x) ? x.map(String).join("; ") : String(x);
+}
+
+/** The text of every ```bible block in a note */
+function extractBibleBlocks(content: string): string[] {
+  const blocks: string[] = [];
+  const re = /^[ \t]*```bible[ \t]*\r?\n([\s\S]*?)^[ \t]*```/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    const body = m[1].trim();
+    if (body) blocks.push(body);
+  }
+  return blocks;
+}
+
+/** Every reading in a note: the reading property plus any ```bible blocks in the body */
+function collectNoteReadings(
+  content: string | null, frontmatter: any, property: string,
+  books: Book[], defaultTranslation: string, translations: string[]
+): IndexedReading[] {
+  const out: IndexedReading[] = [];
+  const done = new Set<string>();
+
+  const add = (raw: string | null, source: "property" | "block") => {
+    const text = raw?.trim();
+    if (!text || done.has(text)) return;     // a frontmatter:reading block repeats the property
+    done.add(text);
+    const parsed = parseReferences(text, books, defaultTranslation, translations, true);
+    if (!parsed.ok) return;
+    for (const r of parsed.readings) {
+      out.push({ bookId: r.book.id, segments: r.segments, label: `${r.book.book} ${formatSegments(r.segments)}`, source });
+    }
+  };
+
+  add(refValueToString(frontmatter?.[property]), "property");
+  if (content) {
+    for (const src of extractBibleBlocks(content)) {
+      const fm = src.match(/^frontmatter:(.+)$/i);
+      add(fm ? refValueToString(frontmatter?.[fm[1].trim()]) : src, "block");
+    }
+  }
+  return out;
+}
+
+function cmpPos(c1: number, v1: number, c2: number, v2: number): number {
+  return c1 !== c2 ? c1 - c2 : v1 - v2;
+}
+
+function segmentsOverlap(a: RefSegment, b: RefSegment): boolean {
+  return cmpPos(a.startChapter, a.startVerse, b.endChapter, b.endVerse) <= 0 &&
+         cmpPos(b.startChapter, b.startVerse, a.endChapter, a.endVerse) <= 0;
+}
+
+/** How a note's passage relates to the one being searched for */
+function segmentRelation(note: RefSegment, query: RefSegment): Relation {
+  const s = cmpPos(note.startChapter, note.startVerse, query.startChapter, query.startVerse);
+  const e = cmpPos(note.endChapter, note.endVerse, query.endChapter, query.endVerse);
+  if (s === 0 && e === 0) return "same";
+  if (s <= 0 && e >= 0) return "includes";
+  if (s >= 0 && e <= 0) return "within";
+  return "overlaps";
+}
+
+function findUsage(notes: Iterable<IndexedNote>, query: ParsedReading[]): UsageHit[] {
+  const hits: UsageHit[] = [];
+  for (const note of notes) {
+    const matches: UsageMatch[] = [];
+    for (const r of note.readings) {
+      let best: Relation | null = null;
+      for (const q of query) {
+        if (q.book.id !== r.bookId) continue;
+        for (const qs of q.segments) {
+          for (const rs of r.segments) {
+            if (!segmentsOverlap(rs, qs)) continue;
+            const rel = segmentRelation(rs, qs);
+            if (best === null || RELATION_RANK[rel] < RELATION_RANK[best]) best = rel;
+          }
+        }
+      }
+      if (best) matches.push({ label: r.label, relation: best, source: r.source });
+    }
+    if (matches.length) {
+      hits.push({ path: note.path, mtime: note.mtime, matches, rank: Math.min(...matches.map((m) => RELATION_RANK[m.relation])) });
+    }
+  }
+  // closest matches first, then most recently edited
+  hits.sort((a, b) => a.rank - b.rank || b.mtime - a.mtime);
+  return hits;
+}
+// ─── end passage usage index ──────────────────────────────────────────────────
 
 /** Human-readable scope label for a note, e.g. "John 3:16–18" or "Romans (whole book)" */
 function noteRefLabel(note: BibleNote, books: Book[]): string {
@@ -1129,6 +1253,87 @@ class BibleQuickInsertModal extends Modal {
 
     insertBtn.onclick = doInsert;
     setTimeout(() => input.focus(), 50);
+  }
+
+  onClose(): void { this.contentEl.empty(); }
+}
+
+// ─── Find notes using a passage ───────────────────────────────────────────────
+
+class BibleUsageModal extends Modal {
+  private plugin: BibleStudyPlugin;
+  private initial: string;
+
+  constructor(app: App, plugin: BibleStudyPlugin, initial = "") {
+    super(app);
+    this.plugin = plugin;
+    this.initial = initial;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "Find notes using a passage", cls: "bible-modal-title" });
+    contentEl.createEl("p", {
+      text: "Type a passage, e.g. John 1:5 · Psalm 23 · Isaiah 40:28-31. Every note whose reading overlaps it is listed. Ctrl/Cmd-click a result to open it in a new tab.",
+      cls: "bible-modal-hint",
+    });
+
+    const input = contentEl.createEl("input", { type: "text", placeholder: "John 1:1-18", cls: "bible-modal-input" });
+    input.value = this.initial;
+    const feedback = contentEl.createEl("p", { cls: "bible-modal-feedback" });
+    const status = contentEl.createEl("p", { cls: "bible-modal-hint" });
+    const list = contentEl.createDiv("bible-usage-list");
+
+    const MAX_ROWS = 200;
+    const render = () => {
+      list.empty();
+      feedback.setText("");
+      status.setText("");
+      const val = input.value.trim();
+      if (!val) return;
+
+      const parsed = parseReferences(
+        val, this.plugin.db.getBookList(), this.plugin.settings.defaultTranslation, this.plugin.db.getTranslations(), true
+      );
+      if (!parsed.ok) { feedback.setText(`⚠  ${parsed.error}`); return; }
+
+      const hits = this.plugin.findPassageUsage(parsed.readings);
+      const indexing = this.plugin.usageIndexReady ? "" : "  (still indexing your notes…)";
+      status.setText(
+        hits.length ? `${hits.length} note${hits.length === 1 ? "" : "s"}${indexing}` : `No notes found for this passage.${indexing}`
+      );
+
+      hits.slice(0, MAX_ROWS).forEach((hit) => {
+        const row = list.createDiv("bible-usage-row");
+        const slash = hit.path.lastIndexOf("/");
+        const name = (slash >= 0 ? hit.path.slice(slash + 1) : hit.path).replace(/\.md$/i, "");
+        row.createDiv({ text: name, cls: "bible-usage-title" });
+        if (slash >= 0) row.createDiv({ text: hit.path.slice(0, slash), cls: "bible-usage-folder" });
+        const chips = row.createDiv("bible-usage-matches");
+        hit.matches.forEach((m) => {
+          chips.createEl("span", {
+            text: `${m.label} · ${RELATION_TEXT[m.relation]}`,
+            cls: m.relation === "same" ? "bible-usage-chip bible-usage-chip--same" : "bible-usage-chip",
+          });
+        });
+        row.onclick = (e) => {
+          const file = this.app.vault.getAbstractFileByPath(hit.path);
+          if (!file) return;
+          this.app.workspace.getLeaf(e.metaKey || e.ctrlKey ? "tab" : false).openFile(file as any);
+          this.close();
+        };
+      });
+      if (hits.length > MAX_ROWS) {
+        list.createEl("p", { text: `…and ${hits.length - MAX_ROWS} more. Narrow the passage to see them.`, cls: "bible-modal-hint" });
+      }
+    };
+
+    input.addEventListener("input", render);
+    // Make sure the index is up to date, then show results
+    this.plugin.buildUsageIndex().then(render);
+    render();
+    setTimeout(() => { input.focus(); input.select(); }, 50);
   }
 
   onClose(): void { this.contentEl.empty(); }
@@ -1664,6 +1869,30 @@ class BibleStudyView extends ItemView {
         this.plugin.deliverText(text);
       };
 
+      // "Used in" — find notes whose reading overlaps this passage
+      if (bookObj) {
+        const verseCount = this.plugin.db.getVerseCount(translation, bookId, chapter);
+        const usageQuery: ParsedReading[] = [{
+          book: bookObj,
+          translation,
+          segments: [{
+            startChapter: chapter, startVerse,
+            endChapter: chapter,
+            endVerse: startVerse === 1 && endVerse >= verseCount ? END_OF_CHAPTER : endVerse,
+          }],
+        }];
+        const usedCount = this.plugin.usageIndexReady ? this.plugin.findPassageUsage(usageQuery).length : 0;
+        const usedBtn = refEl.createEl("button", {
+          text: usedCount ? `Used in ${usedCount}` : "Used in",
+          cls: "bible-ref-insert-btn bible-ref-insert-btn--nav",
+        });
+        usedBtn.title = "Find notes that use this passage";
+        usedBtn.onclick = (e) => {
+          e.stopPropagation();
+          new BibleUsageModal(this.app, this.plugin, `${bookName} ${formatSegments(usageQuery[0].segments)}`).open();
+        };
+      }
+
       // ── Verse block ────────────────────────────────────────────────────────
       const hasTagging = this.plugin.db.translationHasTagging(translation);
       const hasStrongs = hasTagging && this.plugin.db.hasStrongsTable() && this.plugin.settings.strongsEnabled;
@@ -2168,6 +2397,9 @@ class BibleSettingTab extends PluginSettingTab {
     section("Quick insert modal");
     p("Assign a hotkey to Bible: Quick insert Bible passage. A modal opens where you can type any reference and see a live preview before inserting or copying to clipboard.");
 
+    section("Finding notes that use a passage");
+    p("Run Bible: Find notes using a passage (or press Used in on the Passage tab) and type a reference. Every note whose reading overlaps it is listed, so John 1:5 finds a sermon whose reading is John 1:1-18. Notes are found through their reading property (see Settings) and any bible code blocks in their body. Ctrl/Cmd-click a result to open it in a new tab.");
+
     section("Sidebar");
     p("Click the open-book icon in the left ribbon (or run Bible: Open Bible Sidebar) to open the passage browser. Use the Passage tab to read and navigate, the Search tab to find words or Strong's numbers (e.g. G2222), and the Notes tab to keep study notes attached to specific verses.");
 
@@ -2235,6 +2467,19 @@ class BibleSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("Reading property")
+      .setDesc("The frontmatter property that holds a note's Bible reading (e.g. reading: John 1:1-10). \"Find notes using a passage\" uses it, along with any bible code blocks in a note's body.")
+      .addText((text) => text
+        .setPlaceholder("reading")
+        .setValue(this.plugin.settings.readingProperty ?? "reading")
+        .onChange(async (value) => {
+          this.plugin.settings.readingProperty = value.trim() || "reading";
+          await this.plugin.saveSettings();
+          this.plugin.scheduleUsageRebuild();
+        })
+      );
+
+    new Setting(containerEl)
       .setName("Reload Database")
       .setDesc("Apply a new database path without restarting Obsidian.")
       .addButton((btn) => btn.setButtonText("Reload").onClick(async () => {
@@ -2299,6 +2544,12 @@ export default class BibleStudyPlugin extends Plugin {
   db: BibleDatabase = new BibleDatabase();
   private dbLoadCallbacks: (() => void)[] = [];
 
+  // Passage usage index (in memory only; rebuilt from the vault on startup)
+  private usageIndex = new Map<string, IndexedNote>();
+  usageIndexReady = false;
+  private usageBuild: Promise<void> | null = null;
+  private usageRebuildTimer: ReturnType<typeof setTimeout> | null = null;
+
   /** Call cb immediately if DB is ready, otherwise queue it for when it loads */
   onDbReady(cb: () => void): void {
     if (this.db.isLoaded()) cb();
@@ -2308,6 +2559,69 @@ export default class BibleStudyPlugin extends Plugin {
   private flushDbCallbacks(): void {
     const cbs = this.dbLoadCallbacks.splice(0);
     cbs.forEach(cb => cb());
+  }
+
+  // ── Passage usage index ──────────────────────────────────────────────────────
+
+  /** (Re)index one note. content may be null when the note has no code blocks to read. */
+  indexNote(path: string, mtime: number, content: string | null, frontmatter: any): void {
+    if (!this.db.isLoaded()) return;
+    const readings = collectNoteReadings(
+      content, frontmatter, this.settings.readingProperty || "reading",
+      this.db.getBookList(), this.settings.defaultTranslation, this.db.getTranslations()
+    );
+    this.usageIndex.set(path, { path, mtime, readings });
+  }
+
+  /** Scan the vault. Unchanged notes (same mtime) are skipped, so repeat calls are cheap. */
+  buildUsageIndex(force = false): Promise<void> {
+    if (this.usageBuild) {
+      // Already running — for a full rebuild, run another pass once it finishes
+      return force ? this.usageBuild.then(() => this.buildUsageIndex(true)) : this.usageBuild;
+    }
+    if (force) { this.usageIndex.clear(); this.usageIndexReady = false; }
+    this.usageBuild = this.runUsageBuild().finally(() => { this.usageBuild = null; });
+    return this.usageBuild;
+  }
+
+  private async runUsageBuild(): Promise<void> {
+    if (!this.db.isLoaded()) return;
+    const seen = new Set<string>();
+    let incomplete = false;
+    let processed = 0;
+
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      seen.add(file.path);
+      const existing = this.usageIndex.get(file.path);
+      if (existing && existing.mtime === file.stat.mtime) continue;
+
+      const cache = this.app.metadataCache.getFileCache(file);
+      if (!cache) { incomplete = true; continue; }   // Obsidian hasn't indexed it yet; a later pass will
+
+      // Only read the file when it contains a code block that could be a ```bible block
+      const hasCode = (cache.sections ?? []).some((s: any) => s.type === "code");
+      const content = hasCode ? await this.app.vault.cachedRead(file) : null;
+      this.indexNote(file.path, file.stat.mtime, content, cache.frontmatter);
+
+      if (++processed % 50 === 0) await new Promise<void>((r) => setTimeout(r, 0));   // stay responsive
+    }
+
+    for (const path of Array.from(this.usageIndex.keys())) {
+      if (!seen.has(path)) this.usageIndex.delete(path);
+    }
+    this.usageIndexReady = !incomplete;
+  }
+
+  scheduleUsageRebuild(): void {
+    if (this.usageRebuildTimer) clearTimeout(this.usageRebuildTimer);
+    this.usageRebuildTimer = setTimeout(() => {
+      this.usageRebuildTimer = null;
+      void this.buildUsageIndex(true);
+    }, 800);
+  }
+
+  findPassageUsage(query: ParsedReading[]): UsageHit[] {
+    return findUsage(this.usageIndex.values(), query);
   }
 
   async onload(): Promise<void> {
@@ -2347,6 +2661,34 @@ export default class BibleStudyPlugin extends Plugin {
     this.registerMarkdownCodeBlockProcessor("bible", (source, el, ctx) => {
       this.renderBibleBlock(source.trim(), el, ctx);
     });
+
+    // ── Find notes that use a passage ─────────────────────────────────────────
+    this.addCommand({
+      id: "bible-find-usage",
+      name: "Find notes using a passage",
+      callback: () => {
+        if (!this.db.isLoaded()) { new Notice("Bible plugin: database not loaded."); return; }
+        const sel = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.getSelection()?.trim() ?? "";
+        new BibleUsageModal(this.app, this, sel.length <= 80 ? sel : "").open();
+      },
+    });
+
+    // Build the index once Obsidian and the database are ready, then keep it in step with edits
+    this.app.workspace.onLayoutReady(() => this.onDbReady(() => { void this.buildUsageIndex(); }));
+    this.registerEvent(this.app.metadataCache.on("resolved", () => {
+      if (!this.usageIndexReady && this.db.isLoaded()) void this.buildUsageIndex();
+    }));
+    this.registerEvent(this.app.metadataCache.on("changed", (file: any, data: string, cache: any) => {
+      if (file?.extension !== "md") return;
+      this.indexNote(file.path, file.stat?.mtime ?? 0, data, cache?.frontmatter);
+    }));
+    this.registerEvent(this.app.vault.on("delete", (f: any) => { this.usageIndex.delete(f.path); }));
+    this.registerEvent(this.app.vault.on("rename", (f: any, oldPath: string) => {
+      const entry = this.usageIndex.get(oldPath);
+      if (!entry) return;
+      this.usageIndex.delete(oldPath);
+      this.usageIndex.set(f.path, { ...entry, path: f.path });
+    }));
 
     this.addSettingTab(new BibleSettingTab(this.app, this));
   }
@@ -2474,10 +2816,7 @@ export default class BibleStudyPlugin extends Plugin {
       // Always look up the specific key — don't short-circuit on the whole
       // frontmatter object, which may be {} (empty but not null/undefined)
       // A YAML list becomes "a; b" so its items are treated as separate readings
-      const toStr = (x: any): string | null => {
-        if (x === undefined || x === null || x === "") return null;
-        return Array.isArray(x) ? x.map(String).join("; ") : String(x);
-      };
+      const toStr = refValueToString;
       const getFmVal = (): string | null => {
         // ctx.frontmatter is a snapshot from render time
         const fromCtx = toStr(ctx.frontmatter?.[key]);
