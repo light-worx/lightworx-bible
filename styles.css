@@ -1235,3 +1235,7 @@
   background: rgba(74, 144, 217, 0.18);
   color: var(--text-accent);
 }
+
+/* Clicking a passage heading in a ```bible block shows it in the Bible panel */
+.bible-block-ref--link { cursor: pointer; }
+.bible-block-ref--link:hover { text-decoration: underline; }

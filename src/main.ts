@@ -667,6 +667,8 @@ type ParseResult =
 interface ResolvedReading {
   heading: string;       // e.g. "John 1:1–3, 5 (NIV)"
   translation: string;
+  bookId: number;
+  segments: RefSegment[];
   verses: BibleVerse[];
 }
 
@@ -810,6 +812,18 @@ function labelVerses(verses: BibleVerse[]): { label: string; v: BibleVerse }[] {
 function readingToText(r: ResolvedReading): string {
   const body = labelVerses(r.verses).map(({ label, v }) => `${label} ${v.words}`).join(" ");
   return `${r.heading}\n${body}`;
+}
+/** The one-chapter range the Passage tab can show for a reading: its first chapter, from the earliest to the latest verse it uses there */
+function sidebarRangeFor(segments: RefSegment[]): { chapter: number; startVerse: number; endVerse: number } {
+  const chapter = segments[0].startChapter;
+  let startVerse = Infinity;
+  let endVerse = 0;
+  for (const s of segments) {
+    if (chapter < s.startChapter || chapter > s.endChapter) continue;
+    startVerse = Math.min(startVerse, s.startChapter === chapter ? s.startVerse : 1);
+    endVerse = Math.max(endVerse, s.endChapter === chapter ? s.endVerse : END_OF_CHAPTER);
+  }
+  return { chapter, startVerse, endVerse };
 }
 // ─── end reference parsing ────────────────────────────────────────────────────
 
@@ -1668,17 +1682,19 @@ class BibleStudyView extends ItemView {
   async onOpen(): Promise<void> { this.render(); }
   async onClose(): Promise<void> {}
 
-  /** Switch to the Passage tab and open the given verse, defaulting to whole chapter */
-  navigateToPassage(bookId: number, chapter: number, verse: number, translation: string): void {
-    this.currentPassage = {
-      translation,
-      bookId,
-      chapter,
-      startVerse: Math.max(1, verse - 2),
-      endVerse: verse + 2,
-    };
+  /** Switch to the Passage tab showing exactly this range, kept within the chapter's real verses */
+  showPassage(bookId: number, chapter: number, startVerse: number, endVerse: number, translation: string): void {
+    const last = this.plugin.db.getVerseCount(translation, bookId, chapter);
+    const end = last > 0 ? Math.min(endVerse, last) : endVerse;
+    const start = Math.max(1, Math.min(startVerse, end));
+    this.currentPassage = { translation, bookId, chapter, startVerse: start, endVerse: end };
     this.currentMode = "passage";
     this.render();
+  }
+
+  /** Open a search hit in the Passage tab with a couple of verses either side for context */
+  navigateToPassage(bookId: number, chapter: number, verse: number, translation: string): void {
+    this.showPassage(bookId, chapter, verse - 2, verse + 2, translation);
   }
 
   render(): void {
@@ -2398,7 +2414,7 @@ class BibleSettingTab extends PluginSettingTab {
     p("Assign a hotkey to Bible: Quick insert Bible passage. A modal opens where you can type any reference and see a live preview before inserting or copying to clipboard.");
 
     section("Finding notes that use a passage");
-    p("Run Bible: Find notes using a passage (or press Used in on the Passage tab) and type a reference. Every note whose reading overlaps it is listed, so John 1:5 finds a sermon whose reading is John 1:1-18. Notes are found through their reading property (see Settings) and any bible code blocks in their body. Ctrl/Cmd-click a result to open it in a new tab.");
+    p("Run Bible: Find notes using a passage (or press Used in on the Passage tab) and type a reference. Every note whose reading overlaps it is listed, so John 1:5 finds a sermon whose reading is John 1:1-18. Notes are found through their reading property (see Settings) and any bible code blocks in their body. Ctrl/Cmd-click a result to open it in a new tab. In a rendered bible block, click the passage heading to show that passage in the Bible panel, then press Used in.");
 
     section("Sidebar");
     p("Click the open-book icon in the left ribbon (or run Bible: Open Bible Sidebar) to open the passage browser. Use the Passage tab to read and navigate, the Search tab to find words or Strong's numbers (e.g. G2222), and the Notes tab to keep study notes attached to specific verses.");
@@ -2735,6 +2751,14 @@ export default class BibleStudyPlugin extends Plugin {
     workspace.revealLeaf(leaf);
   }
 
+  /** Show a reading in the sidebar's Passage tab, opening the sidebar first if it isn't open */
+  async showReadingInSidebar(r: ResolvedReading): Promise<void> {
+    const { chapter, startVerse, endVerse } = sidebarRangeFor(r.segments);
+    await this.activateSidebar();
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (view instanceof BibleStudyView) view.showPassage(r.bookId, chapter, startVerse, endVerse, r.translation);
+  }
+
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
@@ -2783,7 +2807,7 @@ export default class BibleStudyPlugin extends Plugin {
       }
       const label = `${r.book.book} ${formatSegments(r.segments)}`;
       if (!verses.length) return { ok: false, error: `No verses found for ${label}.` };
-      readings.push({ heading: `${label} (${r.translation.toUpperCase()})`, translation: r.translation, verses });
+      readings.push({ heading: `${label} (${r.translation.toUpperCase()})`, translation: r.translation, bookId: r.book.id, segments: r.segments, verses });
     }
     return { ok: true, readings };
   }
@@ -2875,7 +2899,9 @@ export default class BibleStudyPlugin extends Plugin {
     el.empty();
     result.readings.forEach((r) => {
       const readingEl = el.createDiv("bible-block-reading");
-      readingEl.createEl("div", { text: r.heading, cls: "bible-block-ref" });
+      const headingEl = readingEl.createEl("div", { text: r.heading, cls: "bible-block-ref bible-block-ref--link" });
+      headingEl.title = "Show in the Bible panel";
+      headingEl.onclick = (e) => { e.stopPropagation(); void this.showReadingInSidebar(r); };
       const block = readingEl.createDiv("bible-block-body");
       labelVerses(r.verses).forEach(({ label, v }) => {
         const vEl = block.createEl("span", { cls: "bible-block-verse" });
